@@ -6,162 +6,176 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")  # الآيدي الخاص بك
+ADMIN_ID = os.getenv("ADMIN_ID")  # آيدي المطور
+CHANNEL_USERNAME = "@YourChannelUsername"  # معرف قناتك للاشتراك الإجباري (مثال: @Channel)
+POINTS_PER_REF = 1  # عدد النقاط لكل شخص يدخل عن طريق رابط التمويل
 
-# قواعد بيانات مؤقتة لتخزين بيانات المنصة
-# المراحل الدراسية الأساسية
-stages_db = ["المرحلة الابتدائية", "المرحلة المتوسطة", "المرحلة الاعدادية"]
-# الأزرار الديناميكية (يمكن إضافتها من الآدمن)
-dynamic_buttons = []
-# قسم الامتحانات
-exams_db = {"امتحان الرياضيات - الأول متوسط": "رابط أو أسئلة الامتحان هنا..."}
+# قاعدة بيانات مؤقتة لتخزين المستخدمين والنقاط
+users_db = {}
 
-# القائمة الرئيسية
+# التحقق من الاشتراك الإجباري
+async def check_subscription(user_id, context: ContextTypes.DEFAULT_TYPE):
+    if not CHANNEL_USERNAME or CHANNEL_USERNAME == "@YourChannelUsername":
+        return True
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        if member.status in ['member', 'administrator', 'creator']:
+            return True
+    except Exception:
+        pass
+    return False
+
+# أمر البدء (/start) مع نظام التمويل وإحالة الأصدقاء
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    
+    # تسجيل المستخدم إذا كان جديداً
+    if user_id not in users_db:
+        users_db[user_id] = {"points": 0, "referred": 0}
+        
+    # التحقق من نظام التمويل (Referral) عبر رابط التمويل
+    if context.args:
+        try:
+            referrer_id = int(context.args[0])
+            if referrer_id != user_id and referrer_id in users_db:
+                # التأكد أن المستخدم لم يتم احتسابه مسبقاً
+                if f"ref_{user_id}" not in context.bot_data:
+                    context.bot_data[f"ref_{user_id}"] = True
+                    users_db[referrer_id]["points"] += POINTS_PER_REF
+                    # إشعار الشخص الداعي
+                    try:
+                        await context.bot.send_message(
+                            chat_id=referrer_id,
+                            text=f"🎉 دخل شخص جديد عبر رابط التمويل الخاص بك!\n➕ حصلت على {POINTS_PER_REF} نقطة."
+                        )
+                    except Exception:
+                        pass
+        except ValueError:
+            pass
+
+    # التحقق من الاشتراك الإجباري
+    is_subscribed = await check_subscription(user_id, context)
+    if not is_subscribed:
+        keyboard = [
+            [InlineKeyboardButton("📢 اشترك في قناة البوت", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}")],
+            [InlineKeyboardButton("✅ اشتركت، تحقق من الاشتراك", callback_data="check_sub")]
+        ]
+        await update.message.reply_text(
+            "⚠️ عذراً، يجب عليك الاشتراك في قناة البوت أولاً لاستخدامه.\n\nاشترك في القناة ثم اضغط على زر التحقق:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+
+    # عرض القائمة الرئيسية للبوت
+    await send_main_menu(update, context)
+
+async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    points = users_db.get(user_id, {}).get("points", 0)
     
     keyboard = [
-        [InlineKeyboardButton("📚 المراحل الدراسية", callback_data="stages_menu")],
-        [InlineKeyboardButton("📝 قسم الامتحانات", callback_data="exams_menu")],
-        [InlineKeyboardButton("ℹ️ حول المنصة", callback_data="about_platform")]
+        [InlineKeyboardButton("🔗 رابط التمويل (زيادة نقاطك)", callback_data="ref_link")],
+        [InlineKeyboardButton("💰 نقاطي ورصيدي", callback_data="my_points")],
+        [InlineKeyboardButton("🎁 سحب الأرباح / طلب هدية", callback_data="withdraw")],
+        [InlineKeyboardButton("ℹ️ معلومات البوت", callback_data="about")]
     ]
     
-    # إضافة الأزرار الديناميكية المضافة من قبل الآدمن
-    for btn in dynamic_buttons:
-        keyboard.append([InlineKeyboardButton(btn['text'], callback_data=f"dyn_{btn['id']}")])
-        
-    # زر لوحة التحكم يظهر للمطور فقط
+    # زر لوحة تحكم المطور
     if ADMIN_ID and str(user_id) == str(ADMIN_ID):
-        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم الآدمن", callback_data="admin_panel")])
+        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المطور (الآدمن)", callback_data="admin_panel")])
         
     reply_markup = InlineKeyboardMarkup(keyboard)
-    welcome_text = "🎓 أهلاً بك في المنصة التعليمية الشاملة لجميع المراحل!\nاختر ما يناسبك من القائمة أدناه:"
+    text = (
+        f"🤖 أهلاً بك في بوت التمويل الاحترافي!\n\n"
+        f"💎 نقاطك الحالية: **{points}** نقطة\n"
+        f"قم بمشاركة رابط التمويل الخاص بك لاكتساب المزيد من النقاط!"
+    )
     
     if update.message:
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     elif update.callback_query:
-        await update.callback_query.message.edit_text(welcome_text, reply_markup=reply_markup)
+        await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
-# معالج الأزرار التفاعلية
+# معالج الأزرار والتفاعل
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     data = query.data
     
-    if data == "main_menu":
-        await start(update, context)
+    if data == "check_sub":
+        is_subscribed = await check_subscription(user_id, context)
+        if is_subscribed:
+            await query.message.delete()
+            await send_main_menu(update, context)
+        else:
+            await query.answer("❌ لم تقم بالاشتراك في القناة بعد!", show_alert=True)
+            
+    elif data == "main_menu":
+        await send_main_menu(update, context)
         
-    elif data == "stages_menu":
-        keyboard = [[InlineKeyboardButton(stage, callback_data=f"stage_{stage}")] for stage in stages_db]
-        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")])
-        await query.message.edit_text("📚 اختر المرحلة الدراسية المطلوبة:", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif data == "ref_link":
+        bot_username = (await context.bot.get_me()).username
+        ref_url = f"https://t.me/{bot_username}?start={user_id}"
+        text = (
+            f"🔗 **رابط التمويل الخاص بك:**\n`{ref_url}`\n\n"
+            f"قم بنسخ الرابط ونشره لأصدقائك وفي المجموعات، وكل شخص يدخل عبر رابطك ستحصل مقابلها على نقاط!"
+        )
+        keyboard = [[InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="main_menu")]]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
-    elif data.startswith("stage_"):
-        stage_name = data.split("_")[1]
-        keyboard = [
-            [InlineKeyboardButton("📖 الملازم والكتب", callback_data=f"books_{stage_name}")],
-            [InlineKeyboardButton("🎥 الشروحات والدروس", callback_data=f"videos_{stage_name}")],
-            [InlineKeyboardButton("🔙 رجوع للمراحل", callback_data="stages_menu")]
-        ]
-        await query.message.edit_text(f"📌 أنت الآن في: {stage_name}\nاختر القسم المطلوب:", reply_markup=InlineKeyboardMarkup(keyboard))
-        
-    elif data.startswith("books_") or data.startswith("videos_"):
-        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="stages_menu")]]
-        await query.message.edit_text("📂 عذراً، جاري رفع المناهج والملازم لهذه المرحلة قريباً...", reply_markup=InlineKeyboardMarkup(keyboard))
-        
-    elif data == "exams_menu":
-        keyboard = []
-        for exam_title in exams_db.keys():
-            keyboard.append([InlineKeyboardButton(f"📝 {exam_title}", callback_data=f"exam_detail")])
-        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")])
-        await query.message.edit_text("📝 قسم الامتحانات والاختبارات الوزارية والمدرسية:", reply_markup=InlineKeyboardMarkup(keyboard))
-        
-    elif data == "exam_detail":
-        keyboard = [[InlineKeyboardButton("🔙 رجوع للامتحانات", callback_data="exams_menu")]]
-        await query.message.edit_text("📄 تفاصيل الامتحان: يُرجى الإجابة على الأسئلة وإرسالها للمدرس المختص.\n\n(هنا يتم وضع تفاصيل الامتحان أو الأسئلة)", reply_markup=InlineKeyboardMarkup(keyboard))
-        
-    elif data == "about_platform":
+    elif data == "my_points":
+        points = users_db.get(user_id, {}).get("points", 0)
+        text = f"💰 **رصيدك الحالي:**\nلديك `{points}` نقطة في حسابك."
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]]
-        await query.message.edit_text("ℹ️ منصة تعليمية متكاملة تهدف لخدمة الطلاب في جميع المراحل الدراسية وتوفير كافة المناهج والامتحانات.", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         
-    # --- لوحة تحكم الآدمن ---
+    elif data == "withdraw":
+        text = "🎁 **قسم سحب الأرباح:**\nعليك جمع الحد الأدنى من النقاط لطلب الهدية أو التمويل.\nتواصل مع المطور لطلب السحب عند إتمام النقاط."
+        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    elif data == "about":
+        text = "ℹ️ هذا البوت مصمم خصيصاً للتمويل وزيادة الأعضاء بطريقة آمنة وسريعة."
+        keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        
+    # لوحة تحكم الآدمن
     elif data == "admin_panel":
         if ADMIN_ID and str(user_id) == str(ADMIN_ID):
+            total_users = len(users_db)
+            text = f"⚙️ **لوحة تحكم المطور:**\n\n👥 إجمالي المستخدمين في البوت: `{total_users}` مستخدم"
             keyboard = [
-                [InlineKeyboardButton("➕ إضافة زر جديد بالقائمة", callback_data="add_btn_prompt")],
-                [InlineKeyboardButton("🗑 حذف زر من القائمة", callback_data="del_btn_menu")],
-                [InlineKeyboardButton("➕ إضافة امتحان جديد", callback_data="add_exam_prompt")],
+                [InlineKeyboardButton("📢 إذاعة رسالة للكل", callback_data="broadcast_prompt")],
                 [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
             ]
-            await query.message.edit_text("⚙️ **لوحة تحكم الآدمن الرئيسية:**\nتحكم بكل محتويات المنصة من هنا:", reply_markup=InlineKeyboardMarkup(keyboard))
+            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
         else:
             await query.answer("عذراً، هذه اللوحة للمطور فقط ❌", show_alert=True)
             
-    elif data == "add_btn_prompt":
-        context.user_data['waiting_for_btn'] = True
+    elif data == "broadcast_prompt":
+        context.user_data['waiting_for_broadcast'] = True
         keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="admin_panel")]]
-        await query.message.edit_text("✍️ أرسل الآن **عنوان الزر ورابطه** بهذا الشكل:\n`اسم الزر | https://t.me/...`", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
-        
-    elif data == "del_btn_menu":
-        if not dynamic_buttons:
-            keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")]]
-            await query.message.edit_text("لا توجد أزرار مخصصة لحذفها حالياً.", reply_markup=InlineKeyboardMarkup(keyboard))
-            return
-        keyboard = [[InlineKeyboardButton(f"حذف: {btn['text']}", callback_data=f"remove_btn_{btn['id']}")] for btn in dynamic_buttons]
-        keyboard.append([InlineKeyboardButton("🔙 رجوع", callback_data="admin_panel")])
-        await query.message.edit_text("اختر الزر الذي تريد حذفه:", reply_markup=InlineKeyboardMarkup(keyboard))
-        
-    elif data.startswith("remove_btn_"):
-        btn_id = int(data.split("_")[2])
-        global dynamic_buttons
-        dynamic_buttons = [b for b in dynamic_buttons if b['id'] != btn_id]
-        await query.answer("تم حذف الزر بنجاح! ✅", show_alert=True)
-        await admin_panel_direct(query)
-        
-    elif data == "add_exam_prompt":
-        context.user_data['waiting_for_exam'] = True
-        keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="admin_panel")]]
-        await query.message.edit_text("✍️ أرسل الآن تفاصيل الامتحان الجديد بهذا الشكل:\n`اسم الامتحان - الوصف`", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text("📢 أرسل الآن الرسالة (نص أو صورة) التي تريد إذاعتها لجميع مشتركي البوت:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# دالة مساعدة للرجوع السريع للآدمن
-async def admin_panel_direct(query):
-    keyboard = [
-        [InlineKeyboardButton("➕ إضافة زر جديد بالقائمة", callback_data="add_btn_prompt")],
-        [InlineKeyboardButton("🗑 حذف زر من القائمة", callback_data="del_btn_menu")],
-        [InlineKeyboardButton("➕ إضافة امتحان جديد", callback_data="add_exam_prompt")],
-        [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
-    ]
-    await query.message.edit_text("⚙️ **لوحة تحكم الآدمن الرئيسية:**", reply_markup=InlineKeyboardMarkup(keyboard))
-
-# استقبال رسائل الآدمن لإضافة الأزرار أو الامتحانات ديناميكياً
-async def handle_admin_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# معالج رسائل الإذاعة للآدمن
+async def handle_admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if not ADMIN_ID or str(user_id) != str(ADMIN_ID):
-        return
+    if ADMIN_ID and str(user_id) == str(ADMIN_ID) and context.user_data.get('waiting_for_broadcast'):
+        context.user_data['waiting_for_broadcast'] = False
+        broadcast_text = update.message.text
         
-    text = update.message.text
-    
-    if context.user_data.get('waiting_for_btn'):
-        try:
-            parts = text.split("|")
-            btn_text = parts[0].strip()
-            btn_link = parts[1].strip()
-            
-            new_id = len(dynamic_buttons) + 1
-            dynamic_buttons.append({"id": new_id, "text": btn_text, "link": btn_link})
-            context.user_data['waiting_for_btn'] = False
-            
-            await update.message.reply_text(f"✅ تم إضافة الزر ({btn_text}) بنجاح للقائمة الرئيسية!")
-            await start(update, context)
-        except Exception:
-            await update.message.reply_text("❌ الصيغة غير خاطئة. يا ريت ترسلها بهذا الشكل: `اسم الزر | الرابط`", parse_mode="Markdown")
-            
-    elif context.user_data.get('waiting_for_exam'):
-        exams_db[text] = "تمت الإضافة عبر لوحة التحكم"
-        context.user_data['waiting_for_exam'] = False
-        await update.message.reply_text(f"✅ تم إضافة الامتحان ({text}) بنجاح لقسم الامتحانات!")
-        await start(update, context)
+        success = 0
+        failed = 0
+        for uid in users_db.keys():
+            try:
+                await context.bot.send_message(chat_id=uid, text=f"📢 **إشعار من الإدارة:**\n\n{broadcast_text}", parse_mode="Markdown")
+                success += 1
+            except Exception:
+                failed += 1
+                
+        await update.message.reply_text(f"✅ تمت الإذاعة بنجاح!\n- وصلت إلى: `{success}` مستخدم\n- فشلت لدى: `{failed}` مستخدم")
 
 def main():
     if not TOKEN:
@@ -172,9 +186,9 @@ def main():
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_input))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_admin_messages))
     
-    print("المنصة التعليمية تعمل الآن بكفاءة...")
+    print("بوت التمويل الاحترافي يعمل الآن بكفاءة...")
     app.run_polling()
 
 if __name__ == "__main__":
