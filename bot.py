@@ -5,8 +5,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")  # آيدي المطور
+TOKEN = os.getenv("6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s")
+ADMIN_ID = os.getenv("1792685788")  # آيدي المطور
 CHANNEL_USERNAME = "@YourChannelUsername"  # معرف قناتك للاشتراك الإجباري (مثال: @Channel)
 POINTS_PER_REF = 1  # عدد النقاط لكل شخص يدخل عن طريق رابط التمويل
 
