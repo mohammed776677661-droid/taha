@@ -10,8 +10,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 # 🛑 ضع توكن بوتك وحساب المطور هنا
-TOKEN = "ضع_التوكن_هنا_بين_العلامتين"
-ADMIN_ID = "ضع_آيدي_الآدمن_هنا"
+TOKEN = "6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s"
+ADMIN_ID = "1792685788"
 
 stats_data = {
     "total_messages": 0,
