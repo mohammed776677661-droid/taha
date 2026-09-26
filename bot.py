@@ -1,349 +1,1972 @@
-import os
-import logging
-import random
-from datetime import datetime, timedelta
-from threading import Thread
-from flask import Flask
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
+require("dotenv").config();
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+const express = require("express");
+const session = require("express-session");
+const { Telegraf, Markup } = require("telegraf");
+const { Pool } = require("pg");
+const multer = require("multer");
+const cron = require("node-cron");
+const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
-# 🛑 ضع توكن بوتك وحساب المطور هنا
-TOKEN = "6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s"
-ADMIN_ID = "1792685788"
+const app = express();
 
-stats_data = {
-    "total_messages": 0,
-    "sessions": 1
+const PORT = process.env.PORT || 10000;
+const BASE_URL = (process.env.BASE_URL || "1792685788").replace(/\/$/, "");
+const BOT_TOKEN = process.env.BOT_TOKEN || "6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s";
+
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "change-me";
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5-mini";
+
+const ADMIN_IDS = (process.env.ADMIN_IDS || "")
+  .split(",")
+  .map(x => x.trim())
+  .filter(Boolean);
+
+const TRIAL_DAYS = Number(process.env.TRIAL_DAYS || 30);
+const TZ = process.env.TZ || "Asia/Baghdad";
+
+process.env.TZ = TZ;
+
+
+// ===============================
+// DATABASE
+// ===============================
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+
+  ssl:
+    process.env.DATABASE_URL &&
+    !process.env.DATABASE_URL.includes("localhost")
+      ? { rejectUnauthorized: false }
+      : false
+});
+
+
+async function q(sql, params = []) {
+  const result = await pool.query(sql, params);
+  return result.rows;
 }
 
-attendance_db = {}
-active_subscriptions = {}
-student_views = {}
-student_points = {}
-generated_codes = {"monthly": [], "yearly": []}
 
-# قواعد البيانات الديناميكية القابلة للتعديل الكامل من داخل البوت
-dynamic_stages = {
-    "primary": {
-        "name": "📖 المرحلة الابتدائية",
-        "lectures": [{"title": "🎬 محاضرة الرياضيات - الأساسية", "url": "https://t.me/c/0/0"}]
-    },
-    "intermediate": {
-        "name": "📖 المرحلة المتوسطة",
-        "lectures": [{"title": "🎬 محاضرة الفيزياء والكيمياء", "url": "https://t.me/c/0/0"}]
-    },
-    "secondary": {
-        "name": "📖 المرحلة الإعدادية",
-        "lectures": [{"title": "🎬 محاضرة الأحياء - التكاثر", "url": "https://t.me/c/0/0"}]
-    }
+async function one(sql, params = []) {
+  const result = await pool.query(sql, params);
+  return result.rows[0] || null;
 }
 
-science_questions_bank = [
-    {
-        "q": "🧠 ما هو بيت الطاقة الرئيسي داخل الخلية الحية؟",
-        "options": [("✅ الميتوكوندريا", True), ("❌ الرايبوسوم", False), ("❌ نواة الخلية", False)]
-    },
-    {
-        "q": "⚗️ ما هي وحدة قياس التيار الكهربائي في النظام الدولي؟",
-        "options": [("❌ الفولت", False), ("✅ الأمبير", True), ("❌ الأوم", False)]
+
+// ===============================
+// FILE UPLOAD
+// ===============================
+
+const uploadDir = path.join(__dirname, "uploads");
+
+fs.mkdirSync(uploadDir, {
+  recursive: true
+});
+
+
+const upload = multer({
+  dest: uploadDir,
+
+  limits: {
+    fileSize: 250 * 1024 * 1024
+  }
+});
+
+
+// ===============================
+// EXPRESS
+// ===============================
+
+app.use(
+  express.json({
+    limit: "10mb"
+  })
+);
+
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: "10mb"
+  })
+);
+
+
+// ===============================
+// SESSION
+// ===============================
+
+app.use(
+  session({
+    secret:
+      process.env.SESSION_SECRET ||
+      "change-this-session-secret",
+
+    resave: false,
+
+    saveUninitialized: false,
+
+    cookie: {
+      httpOnly: true,
+      sameSite: "lax",
+
+      secure:
+        process.env.NODE_ENV === "production",
+
+      maxAge: 7 * 86400000
     }
-]
+  })
+);
 
-app_flask = Flask('')
 
-@app_flask.route('/')
-def home():
-    return "Ultimate CMS Educational Bot is running perfectly!"
+// ===============================
+// HELPERS
+// ===============================
 
-def run_flask():
-    app_flask.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+function esc(value = "") {
+  return String(value).replace(
+    /[&<>"']/g,
+    c =>
+      ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[c])
+  );
+}
 
-def get_main_reply_keyboard(is_admin=False):
-    keyboard = [
-        [KeyboardButton("📚 قسم المحاضرات والملازم"), KeyboardButton("🏆 لوحة المتصدرين والأبطال")],
-        [KeyboardButton("🤖 الأستاذ الذكي (AI)"), KeyboardButton("📜 شهادة التقدير الإلكترونية")],
-        [KeyboardButton("💎 تفعيل كود الاشتراك"), KeyboardButton("👤 ملفي وسجل الحضور")],
-        [KeyboardButton("🎮 الألعاب والتحديات الفورية")]
-    ]
-    if is_admin:
-        keyboard.append([KeyboardButton("⚙️ لوحة تحكم المطور والـ CMS الشاملة")])
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏓 **المنصة تعمل بكفاءة تامة وبأفضل حال! ✅**")
+function fmtDate(date) {
+  if (!date) {
+    return "غير محدد";
+  }
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in attendance_db:
-        context.user_data['reg_step'] = 'name'
-        await update.message.reply_text(
-            "🌟 **أهلاً بك في المنصة التعليمية العراقية الذكية**\n\n"
-            "🎁 **هدية ترحيبية:** ستحصل فوراً على اشتراك مجاني لمدة **30 يوماً** + 50 نقطة XP!\n\n"
-            "يرجى إرسال **اسمك الثلاثي** الآن للبدء:"
-        )
-        return
-    
-    is_admin = (ADMIN_ID and str(user_id) == str(ADMIN_ID))
-    await update.message.reply_text(
-        "🎓 **القائمة الرئيسية - اختر القسم المطلوب:**",
-        reply_markup=get_main_reply_keyboard(is_admin)
+  return new Date(date).toLocaleString(
+    "ar-IQ",
+    {
+      timeZone: TZ
+    }
+  );
+}
+
+
+function isActive(user) {
+  return (
+    user &&
+    user.subscription_expires_at &&
+    new Date(
+      user.subscription_expires_at
+    ).getTime() > Date.now()
+  );
+}
+
+
+// ===============================
+// SECURITY TOKEN
+// ===============================
+
+function createToken(
+  data,
+  secret =
+    process.env.SESSION_SECRET ||
+    "secret"
+) {
+  const body = Buffer
+    .from(JSON.stringify(data))
+    .toString("base64url");
+
+  const signature = crypto
+    .createHmac(
+      "sha256",
+      secret
     )
+    .update(body)
+    .digest("base64url");
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-    stats_data["total_messages"] += 1
-    step = context.user_data.get('reg_step')
-    is_admin = (ADMIN_ID and str(user_id) == str(ADMIN_ID))
+  return body + "." + signature;
+}
 
-    # معالجة أزرار الواجهة
-    if text == "📚 قسم المحاضرات والملازم":
-        keyboard = [[InlineKeyboardButton(data["name"], callback_data=f"lect_{key}")] for key, data in dynamic_stages.items()]
-        keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu_cb")])
-        await update.message.reply_text("📚 **اختر المرحلة الدراسية لاستعراض المحاضرات:**", reply_markup=InlineKeyboardMarkup(keyboard))
-        return
 
-    elif text == "🏆 لوحة المتصدرين والأبطال":
-        sorted_students = sorted(student_views.items(), key=lambda x: x[1], reverse=True)[:10]
-        leaderboard_text = "🏆 **قائمة أساطير العراق التعليمية:**\n\n"
-        if not sorted_students:
-            leaderboard_text += "القائمة فارغة حالياً. كن البطل الأول! 🌟"
-        else:
-            for idx, (uid, views) in enumerate(sorted_students, 1):
-                s_name = attendance_db.get(uid, {}).get("name", "طالب مجهول")
-                pts = student_points.get(uid, 0)
-                leaderboard_text += f"{idx}. **{s_name}** — 👁‍🗨 `{views}` مشاهدة | ⚡ `{pts} XP`\n"
-        await update.message.reply_text(leaderboard_text, parse_mode="Markdown")
-        return
+function verifyToken(
+  token,
+  secret =
+    process.env.SESSION_SECRET ||
+    "secret"
+) {
+  try {
+    const parts = String(token || "").split(".");
 
-    elif text == "🤖 الأستاذ الذكي (AI)":
-        context.user_data['waiting_for_ai_question'] = True
-        await update.message.reply_text("🤖 **الأستاذ الذكي الخصوصي:**\nاكتب أي سؤال علمي واجهك (رياضيات، فيزياء، أحياء...) وسأشرحه لك فوراً:", reply_markup=ReplyKeyboardMarkup([["❌ إنهاء جلسة الأستاذ الذكي"]], resize_keyboard=True))
-        return
+    if (parts.length !== 2) {
+      return null;
+    }
 
-    elif text == "❌ إنهاء جلسة الأستاذ الذكي":
-        context.user_data['waiting_for_ai_question'] = False
-        await update.message.reply_text("✅ تم الإنهاء.", reply_markup=get_main_reply_keyboard(is_admin))
-        return
+    const body = parts[0];
+    const signature = parts[1];
 
-    elif text == "📜 شهادة التقدير الإلكترونية":
-        info = attendance_db.get(user_id, {"name": "طالب مجتهد", "province": "العراق", "school": "المنصة الذكية"})
-        pts = student_points.get(user_id, 0)
-        cert = f"╔═══════════════════════╗\n      🌟 **شهادة تقدير وتفوق رسمي** 🌟\n╚═══════════════════════╝\n\nتعلن المنصة عن منح الشهادة إلى البطل:\n📌 **{info['name']}**\n🏫 المدرسة: `{info['school']}`\n⚡ نقاط التفاعل: `{pts} XP`"
-        await update.message.reply_text(cert, parse_mode="Markdown")
-        return
+    const expected = crypto
+      .createHmac(
+        "sha256",
+        secret
+      )
+      .update(body)
+      .digest("base64url");
 
-    elif text == "💎 تفعيل كود الاشتراك":
-        context.user_data['entering_sub_code'] = True
-        await update.message.reply_text("💎 **تفعيل كود الاشتراك:**\nأرسل الكود (الشهري أو السنوي) لتفعيله فوراً:")
-        return
+    if (
+      !crypto.timingSafeEqual(
+        Buffer.from(signature),
+        Buffer.from(expected)
+      )
+    ) {
+      return null;
+    }
 
-    elif text == "👤 ملفي وسجل الحضور":
-        info = attendance_db.get(user_id, {"name": "غير مسجل", "province": "-", "school": "-"})
-        sub = active_subscriptions.get(user_id, "تجريبي مجاني (30 يوم) 🎁")
-        pts = student_points.get(user_id, 0)
-        await update.message.reply_text(f"👤 **ملفك الشخصي:**\n\n▫️ الاسم: `{info['name']}`\n▫️ المحافظة: `{info['province']}`\n▫️ المدرسة: `{info['school']}`\n▫️ الاشتراك: **{sub}**\n▫️ النقاط: `{pts} XP`", parse_mode="Markdown")
-        return
+    const data = JSON.parse(
+      Buffer
+        .from(body, "base64url")
+        .toString()
+    );
 
-    elif text == "🎮 الألعاب والتحديات الفورية":
-        await update.message.reply_text("🎮 **قسم المسابقات العلمية الحية:**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 ابدأ التحدي العشوائي", callback_data="play_next_question")]]))
-        return
+    if (
+      data.exp &&
+      Date.now() > data.exp
+    ) {
+      return null;
+    }
 
-    elif text == "⚙️ لوحة تحكم المطور والـ CMS الشاملة" and is_admin:
-        panel_text = f"⚙️ **لوحة التحكم الإدارية الداخلية (CMS):**\n\n👥 الطلاب المسجلين: `{len(attendance_db)}`\n💬 رسائل البوت: `{stats_data['total_messages']}`\n\nاختر العملية الإدارية المطلوبة:"
-        keyboard = [
-            [InlineKeyboardButton("➕ إضافة مرحلة أو قسم جديد", callback_data="cms_add_stage")],
-            [InlineKeyboardButton("📚 إضافة محاضرة/ملزمة لقسم", callback_data="cms_add_lecture")],
-            [InlineKeyboardButton("🎟 توليد كود اشتراك جديد", callback_data="admin_gen_code")],
-            [InlineKeyboardButton("📢 إرسال إعلان عام للجميع", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("📋 عرض كشوفات الطلاب", callback_data="admin_show_logs")]
-        ]
-        await update.message.reply_text(panel_text, reply_markup=InlineKeyboardMarkup(keyboard))
-        return
+    return data;
 
-    # معالجة المدخلات الديناميكية للوحة التحكم (CMS)
-    if is_admin and context.user_data.get('cms_step') == 'getting_stage_id':
-        key = text.strip().lower()
-        context.user_data['temp_stage_key'] = key
-        context.user_data['cms_step'] = 'getting_stage_name'
-        await update.message.reply_text(f"📍 ممتاز. الآن أرسل **اسم القسم الظاهري** (مثلاً: 📖 المرحلة الابتدائية):")
-        return
+  } catch {
+    return null;
+  }
+}
 
-    elif is_admin and context.user_data.get('cms_step') == 'getting_stage_name':
-        s_name = text.strip()
-        s_key = context.user_data.get('temp_stage_key')
-        dynamic_stages[s_key] = {"name": s_name, "lectures": []}
-        context.user_data['cms_step'] = None
-        await update.message.reply_text(f"✅ تم إضافة القسم الجديد ({s_name}) بنجاح وتفعيله في البوت فوراً!", reply_markup=get_main_reply_keyboard(is_admin))
-        return
 
-    elif is_admin and context.user_data.get('cms_step') == 'getting_lect_title':
-        context.user_data['temp_lect_title'] = text.strip()
-        context.user_data['cms_step'] = 'getting_lect_url'
-        await update.message.reply_text("🔗 الآن أرسل **رابط المحاضرة أو الملزمة** (رابط مباشر أو تليجرام):")
-        return
+// ===============================
+// DATABASE INITIALIZATION
+// ===============================
 
-    elif is_admin and context.user_data.get('cms_step') == 'getting_lect_url':
-        l_url = text.strip()
-        l_title = context.user_data.get('temp_lect_title')
-        s_key = context.user_data.get('temp_target_stage')
-        if s_key in dynamic_stages:
-            dynamic_stages[s_key]["lectures"].append({"title": l_title, "url": l_url})
-            context.user_data['cms_step'] = None
-            await update.message.reply_text(f"✅ تم إضافة المحاضرة ({l_title}) بنجاح إلى القسم المطلوب!", reply_markup=get_main_reply_keyboard(is_admin))
-        else:
-            await update.message.reply_text("❌ حدث خطأ، القسم غير موجود.")
-        return
+async function initDB() {
 
-    if context.user_data.get('waiting_for_ai_question'):
-        await update.message.reply_text(f"🤖 **إجابة الأستاذ الذكي:**\n\nبناءً على سؤالك (`{text}`): القاعدة العلمية واضحة وتتطلب تطبيق المعطيات بخطوات دقيقة. استمر في التفوق!", parse_mode="Markdown")
-        return
+  await q(`
 
-    if step == 'name':
-        context.user_data['temp_name'] = text
-        context.user_data['reg_step'] = 'province'
-        await update.message.reply_text("📍 أرسل **اسم المحافظة**:")
-        return
-    elif step == 'province':
-        context.user_data['temp_province'] = text
-        context.user_data['reg_step'] = 'school'
-        await update.message.reply_text("🏫 أرسل **اسم المدرسة**:")
-        return
-    elif step == 'school':
-        attendance_db[user_id] = {"name": context.user_data.get('temp_name'), "province": context.user_data.get('temp_province'), "school": text}
-        expire_date = datetime.now() + timedelta(days=30)
-        active_subscriptions[user_id] = f"هدية مجانية لغاية {expire_date.strftime('%Y-%m-%d')} 🎁"
-        student_points[user_id] = 50
-        context.user_data['reg_step'] = None
-        await update.message.reply_text("✅ **تم تسجيلك بنجاح ومنحك هدية 30 يوماً!** 🎉", reply_markup=get_main_reply_keyboard(is_admin))
-        return
+    CREATE TABLE IF NOT EXISTS users (
 
-    if context.user_data.get('entering_sub_code'):
-        context.user_data['entering_sub_code'] = False
-        code = text.strip()
-        if code in generated_codes["monthly"]:
-            active_subscriptions[user_id] = "اشتراك شهري مفعل ⭐️"
-            generated_codes["monthly"].remove(code)
-            student_points[user_id] = student_points.get(user_id, 0) + 100
-            await update.message.reply_text("🎉 **تم تفعيل اشتراكك الشهري بنجاح!**")
-        elif code in generated_codes["yearly"]:
-            active_subscriptions[user_id] = "اشتراك سنوي مفعل 💎"
-            generated_codes["yearly"].remove(code)
-            student_points[user_id] = student_points.get(user_id, 0) + 300
-            await update.message.reply_text("💎 **تم تفعيل اشتراكك السنوي بنجاح!**")
-        else:
-            await update.message.reply_text("❌ **الكود غير صالح أو مستخدم مسبقاً.**")
-        return
+      id BIGSERIAL PRIMARY KEY,
 
-    if is_admin and context.user_data.get('broadcasting'):
-        context.user_data['broadcasting'] = False
-        count = 0
-        for uid in attendance_db.keys():
-            try:
-                await context.bot.send_message(chat_id=uid, text=f"📢 **إعلان هام:**\n\n{text}")
-                count += 1
-            except:
-                pass
-        await update.message.reply_text(f"✅ تم الإرسال إلى {count} طالب.")
-        return
+      telegram_id BIGINT UNIQUE NOT NULL,
 
-    if user_id in attendance_db:
-        await update.message.reply_text("يرجى استخدام الأزرار السفلية:", reply_markup=get_main_reply_keyboard(is_admin))
-    else:
-        await start(update, context)
+      username TEXT,
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    data = query.data
+      first_name TEXT,
 
-    if data.startswith("lect_"):
-        stage_key = data.replace("lect_", "")
-        stage_info = dynamic_stages.get(stage_key)
-        if not stage_info:
-            await query.message.edit_text("❌ القسم غير موجود.")
-            return
-            
-        student_views[user_id] = student_views.get(user_id, 0) + 1
-        student_points[user_id] = student_points.get(user_id, 0) + 10
+      last_name TEXT,
+
+      subscription_expires_at TIMESTAMPTZ,
+
+      trial_claimed BOOLEAN DEFAULT FALSE,
+
+      is_blocked BOOLEAN DEFAULT FALSE,
+
+      created_at TIMESTAMPTZ DEFAULT NOW()
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS subscription_codes (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      code TEXT UNIQUE NOT NULL,
+
+      plan TEXT NOT NULL,
+
+      days INT NOT NULL,
+
+      used_by BIGINT REFERENCES users(id),
+
+      used_at TIMESTAMPTZ,
+
+      created_at TIMESTAMPTZ DEFAULT NOW()
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS lectures (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      title TEXT NOT NULL,
+
+      description TEXT,
+
+      subject TEXT,
+
+      grade TEXT,
+
+      media_type TEXT DEFAULT 'video',
+
+      file_url TEXT,
+
+      original_name TEXT,
+
+      is_active BOOLEAN DEFAULT TRUE,
+
+      created_at TIMESTAMPTZ DEFAULT NOW()
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS materials (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      title TEXT NOT NULL,
+
+      description TEXT,
+
+      subject TEXT,
+
+      grade TEXT,
+
+      file_url TEXT,
+
+      original_name TEXT,
+
+      created_at TIMESTAMPTZ DEFAULT NOW()
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS exams (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      title TEXT NOT NULL,
+
+      description TEXT,
+
+      duration_minutes INT DEFAULT 30,
+
+      is_active BOOLEAN DEFAULT TRUE,
+
+      created_at TIMESTAMPTZ DEFAULT NOW()
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS questions (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      exam_id BIGINT
+        REFERENCES exams(id)
+        ON DELETE CASCADE,
+
+      question_text TEXT NOT NULL,
+
+      image_url TEXT,
+
+      type TEXT DEFAULT 'mcq',
+
+      options JSONB DEFAULT '[]',
+
+      correct_answer TEXT,
+
+      points INT DEFAULT 1
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS exam_attempts (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      exam_id BIGINT
+        REFERENCES exams(id)
+        ON DELETE CASCADE,
+
+      user_id BIGINT
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+      started_at TIMESTAMPTZ DEFAULT NOW(),
+
+      expires_at TIMESTAMPTZ NOT NULL,
+
+      submitted_at TIMESTAMPTZ,
+
+      score NUMERIC DEFAULT 0,
+
+      max_score NUMERIC DEFAULT 0,
+
+      percentage NUMERIC DEFAULT 0,
+
+      answers JSONB DEFAULT '{}',
+
+      ai_feedback TEXT
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS attendance (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      user_id BIGINT
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+      day DATE NOT NULL,
+
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+
+      UNIQUE(user_id, day)
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS lecture_views (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      user_id BIGINT
+        REFERENCES users(id)
+        ON DELETE CASCADE,
+
+      lecture_id BIGINT
+        REFERENCES lectures(id)
+        ON DELETE CASCADE,
+
+      viewed_at TIMESTAMPTZ DEFAULT NOW()
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS challenges (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      title TEXT NOT NULL,
+
+      description TEXT,
+
+      reward TEXT,
+
+      start_at TIMESTAMPTZ,
+
+      end_at TIMESTAMPTZ,
+
+      is_active BOOLEAN DEFAULT TRUE,
+
+      created_at TIMESTAMPTZ DEFAULT NOW()
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS weekly_winners (
+
+      id BIGSERIAL PRIMARY KEY,
+
+      period_start TIMESTAMPTZ,
+
+      period_end TIMESTAMPTZ,
+
+      user_id BIGINT
+        REFERENCES users(id),
+
+      views_count INT DEFAULT 0,
+
+      created_at TIMESTAMPTZ DEFAULT NOW()
+
+    );
+
+
+    CREATE TABLE IF NOT EXISTS settings (
+
+      key TEXT PRIMARY KEY,
+
+      value TEXT
+
+    );
+
+  `);
+
+
+  const defaults = {
+
+    site_name:
+      "منصة العراق التعليمية",
+
+    primary_color:
+      "#2563eb",
+
+    secondary_color:
+      "#7c3aed",
+
+    welcome:
+      "أهلاً بك في منصة العراق التعليمية"
+
+  };
+
+
+  for (
+    const [key, value]
+    of Object.entries(defaults)
+  ) {
+
+    await q(
+      `
+      INSERT INTO settings(key,value)
+
+      VALUES($1,$2)
+
+      ON CONFLICT(key)
+      DO NOTHING
+      `,
+      [key, value]
+    );
+
+  }
+
+}
+
+
+// ===============================
+// SETTINGS
+// ===============================
+
+async function getSettings() {
+
+  const rows = await q(
+    "SELECT key,value FROM settings"
+  );
+
+  return Object.fromEntries(
+    rows.map(row => [
+      row.key,
+      row.value
+    ])
+  );
+}
+
+
+async function setting(
+  key,
+  fallback = ""
+) {
+
+  const row = await one(
+    "SELECT value FROM settings WHERE key=$1",
+    [key]
+  );
+
+  return row?.value ?? fallback;
+}
+
+
+// ===============================
+// TELEGRAM USER
+// ===============================
+
+async function getOrCreateUser(ctx) {
+
+  const from = ctx.from;
+
+  let user = await one(
+    `
+    SELECT *
+    FROM users
+    WHERE telegram_id=$1
+    `,
+    [from.id]
+  );
+
+
+  if (!user) {
+
+    const expires =
+      new Date(
+        Date.now() +
+        TRIAL_DAYS *
+        86400000
+      );
+
+
+    user = await one(
+      `
+      INSERT INTO users(
+
+        telegram_id,
+
+        username,
+
+        first_name,
+
+        last_name,
+
+        subscription_expires_at,
+
+        trial_claimed
+
+      )
+
+      VALUES(
+
+        $1,$2,$3,$4,$5,true
+
+      )
+
+      RETURNING *
+      `,
+      [
+        from.id,
+
+        from.username || "",
+
+        from.first_name || "",
+
+        from.last_name || "",
+
+        expires
+      ]
+    );
+
+
+    try {
+
+      await ctx.reply(
+        `🎁 تم تفعيل هدية التسجيل المجانية لمدة ${TRIAL_DAYS} يوم.\n\n` +
+        `ينتهي اشتراكك:\n${fmtDate(expires)}`
+      );
+
+    } catch {}
+
+  } else {
+
+    await q(
+      `
+      UPDATE users
+
+      SET
+
+        username=$1,
+
+        first_name=$2,
+
+        last_name=$3
+
+      WHERE id=$4
+      `,
+      [
+        from.username || "",
+
+        from.first_name || "",
+
+        from.last_name || "",
+
+        user.id
+      ]
+    );
+
+  }
+
+
+  return await one(
+    "SELECT * FROM users WHERE id=$1",
+    [user.id]
+  );
+
+}
+
+
+// ===============================
+// MAIN TELEGRAM MENU
+// ===============================
+
+function mainKeyboard() {
+
+  return Markup.inlineKeyboard([
+
+    [
+
+      Markup.button.callback(
+        "📚 المحاضرات",
+        "lectures"
+      ),
+
+      Markup.button.callback(
+        "📖 الملازم",
+        "materials"
+      )
+
+    ],
+
+    [
+
+      Markup.button.callback(
+        "📝 الامتحانات",
+        "exams"
+      ),
+
+      Markup.button.callback(
+        "🏆 التحديات",
+        "challenges"
+      )
+
+    ],
+
+    [
+
+      Markup.button.callback(
+        "🟢 الحضور اليومي",
+        "attendance"
+      ),
+
+      Markup.button.callback(
+        "💳 الاشتراك",
+        "subscription"
+      )
+
+    ],
+
+    [
+
+      Markup.button.callback(
+        "👤 حسابي",
+        "account"
+      ),
+
+      Markup.button.callback(
+        "📞 الدعم",
+        "support"
+      )
+
+    ]
+
+  ]);
+
+}
+
+
+// ===============================
+// LECTURE LINK
+// ===============================
+
+async function lectureLink(
+  userId,
+  lectureId
+) {
+
+  if (!BASE_URL) {
+    return null;
+  }
+
+
+  const t = createToken({
+
+    uid: userId,
+
+    lid: lectureId,
+
+    exp:
+      Date.now() +
+      86400000
+
+  });
+
+
+  return (
+    `${BASE_URL}/view/lecture/` +
+    `${lectureId}?token=` +
+    encodeURIComponent(t)
+  );
+
+}
+
+
+// ===============================
+// EXAM LINK
+// ===============================
+
+async function examLink(
+  userId,
+  examId
+) {
+
+  if (!BASE_URL) {
+    return null;
+  }
+
+
+  const t = createToken({
+
+    uid: userId,
+
+    eid: examId,
+
+    exp:
+      Date.now() +
+      86400000
+
+  });
+
+
+  return (
+    `${BASE_URL}/app/exam/` +
+    `${examId}?token=` +
+    encodeURIComponent(t)
+  );
+
+}
+
+
+// ===============================
+// TELEGRAM BOT
+// ===============================
+
+let bot = null;
+
+
+if (BOT_TOKEN) {
+
+  bot = new Telegraf(
+    BOT_TOKEN
+  );
+
+
+  bot.start(
+    async ctx => {
+
+      const user =
+        await getOrCreateUser(ctx);
+
+
+      if (user.is_blocked) {
+
+        return ctx.reply(
+          "🚫 حسابك محظور."
+        );
+
+      }
+
+
+      const settings =
+        await getSettings();
+
+
+      await ctx.reply(
+
+        `${settings.welcome}\n\n` +
+        `اختر من القائمة:`,
         
-        text = f"🎬 **{stage_info['name']}:**\n\n⚡ بث فوري مباشر آمن:\n\n"
-        keyboard = [[InlineKeyboardButton(lect["title"], url=lect["url"])] for lect in stage_info["lectures"]]
-        keyboard.append([InlineKeyboardButton("🔙 رجوع للأقسام", callback_data="back_to_lectures")])
-        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        mainKeyboard()
 
-    elif data == "back_to_lectures":
-        keyboard = [[InlineKeyboardButton(d["name"], callback_data=f"lect_{k}")] for k, d in dynamic_stages.items()]
-        await query.message.edit_text("📚 **اختر المرحلة الدراسية:**", reply_markup=InlineKeyboardMarkup(keyboard))
+      );
 
-    elif data == "cms_add_stage":
-        context.user_data['cms_step'] = 'getting_stage_id'
-        await query.message.edit_text("➕ أرسل الآن **معرف القسم بالإنجليزية** (مثلاً: `university` أو `third_grade` بدون مسافات):")
+    }
+  );
 
-    elif data == "cms_add_lecture":
-        if not dynamic_stages:
-            await query.message.edit_text("❌ لا توجد أقسام مضافة حالياً. أضف قسماً أولاً.")
-            return
-        keyboard = [[InlineKeyboardButton(d["name"], callback_data=f"select_stage_{k}")] for k, d in dynamic_stages.items()]
-        await query.message.edit_text("📚 اختر القسم الذي تريد إضافة المحاضرة إليه:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif data.startswith("select_stage_"):
-        s_key = data.replace("select_stage_", "")
-        context.user_data['temp_target_stage'] = s_key
-        context.user_data['cms_step'] = 'getting_lect_title'
-        await query.message.edit_text("✍️ أرسل الآن **عنوان المحاضرة أو الملزمة**:")
+  bot.command(
+    "admin",
+    async ctx => {
 
-    elif data == "play_next_question":
-        q_item = random.choice(science_questions_bank)
-        options = q_item["options"]
-        random.shuffle(options)
-        keyboard = [[InlineKeyboardButton(opt_text, callback_data="game_win" if is_c else "game_loss")] for opt_text, is_c in options]
-        keyboard.append([InlineKeyboardButton("⏭ سؤال آخر", callback_data="play_next_question")])
-        await query.message.edit_text(f"🎯 **تحدي الذكاء:**\n\n{q_item['q']}", reply_markup=InlineKeyboardMarkup(keyboard))
+      if (
+        !ADMIN_IDS.includes(
+          String(ctx.from.id)
+        )
+      ) {
 
-    elif data == "game_win":
-        student_points[user_id] = student_points.get(user_id, 0) + 20
-        await query.message.edit_text("🌟 **إجابة صحيحة (+20 XP)!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏆 لعب مجدداً", callback_data="play_next_question")]]))
+        return ctx.reply(
+          "❌ غير مصرح."
+        );
 
-    elif data == "game_loss":
-        await query.message.edit_text("❌ **إجابة خاطئة!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 محاولة أخرى", callback_data="play_next_question")]]))
+      }
 
-    elif data == "admin_gen_code":
-        m_code = f"CMS-M-{random.randint(1000, 9999)}"
-        y_code = f"CMS-Y-{random.randint(10000, 99999)}"
-        generated_codes["monthly"].append(m_code)
-        generated_codes["yearly"].append(y_code)
-        await query.message.edit_text(f"🎟 **الأكواد المולدة بنجاح:**\n\n⭐️ شهري: `{m_code}`\n💎 سنوي: `{y_code}`", parse_mode="Markdown")
 
-    elif data == "admin_broadcast":
-        context.user_data['broadcasting'] = True
-        await query.message.edit_text("📢 أرسل نص الإعلان الآن لبثه لجميع الطلاب:")
+      if (!BASE_URL) {
 
-    elif data == "admin_show_logs":
-        logs = "\n".join([f"• {d['name']} | {d['province']} | {d['school']}" for d in attendance_db.values()])
-        if not logs:
-            logs = "لا توجد سجلات."
-        await query.message.edit_text(f"📋 **سجل الحضور والطلاب:**\n\n{logs}")
+        return ctx.reply(
+          "ضع BASE_URL أولاً."
+        );
 
-def main():
-    if not TOKEN or TOKEN == "ضع_التوكن_هنا_بين_العلامتين":
-        print("خطأ: يرجى وضع التوكن الحقيقي داخل الكود!")
-        return
+      }
 
-    Thread(target=run_flask).start()
 
-    app = ApplicationBuilder().token(TOKEN).build()
-    
-    app.add_handler(CommandHandler("ping", ping_command))
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-    
-    print("نظام المنصة التعليمية مع لوحة تحكم CMS داخلية يعمل بكفاءة تامة...")
-    app.run_polling()
+      ctx.reply(
+        `🔐 لوحة الإدارة:\n\n${BASE_URL}/admin`
+      );
 
-if __name__ == "__main__":
-    main()
+    }
+  );
+
+
+  bot.on(
+    "callback_query",
+    async ctx => {
+
+      const user =
+        await getOrCreateUser(ctx);
+
+
+      if (user.is_blocked) {
+
+        return ctx.answerCbQuery(
+          "الحساب محظور"
+        );
+
+      }
+
+
+      const action =
+        ctx.callbackQuery.data;
+
+
+      await ctx.answerCbQuery()
+        .catch(() => {});
+
+
+      // القائمة الرئيسية
+
+      if (action === "menu") {
+
+        return ctx
+          .editMessageText(
+            "📋 القائمة الرئيسية:",
+            mainKeyboard()
+          )
+          .catch(() =>
+            ctx.reply(
+              "📋 القائمة الرئيسية:",
+              mainKeyboard()
+            )
+          );
+
+      }
+
+
+      // الحضور
+
+      if (
+        action === "attendance"
+      ) {
+
+        const inserted =
+          await one(
+            `
+            INSERT INTO attendance(
+              user_id,
+              day
+            )
+
+            VALUES(
+              $1,
+              CURRENT_DATE
+            )
+
+            ON CONFLICT(
+              user_id,
+              day
+            )
+
+            DO NOTHING
+
+            RETURNING id
+            `,
+            [user.id]
+          );
+
+
+        const count =
+          await one(
+            `
+            SELECT COUNT(*)::int AS n
+
+            FROM attendance
+
+            WHERE user_id=$1
+            `,
+            [user.id]
+          );
+
+
+        if (inserted) {
+
+          return ctx.reply(
+            `✅ تم تسجيل حضورك اليوم.\n\n` +
+            `🔥 مجموع أيام حضورك: ${count.n}`
+          );
+
+        }
+
+
+        return ctx.reply(
+          `ℹ️ أنت مسجل حضور اليوم مسبقاً.\n\n` +
+          `🔥 مجموع أيام حضورك: ${count.n}`
+        );
+
+      }
+
+
+      // الحساب
+
+      if (action === "account") {
+
+        return ctx.reply(
+
+          `👤 حسابي\n\n` +
+
+          `الاسم: ${
+            user.first_name || ""
+          }\n` +
+
+          `المعرف: @` +
+          `${user.username || "بدون"}\n\n` +
+
+          `الاشتراك: ` +
+          `${
+            isActive(user)
+              ? "فعال ✅"
+              : "منتهي ❌"
+          }\n` +
+
+          `ينتهي: ` +
+          `${fmtDate(
+            user.subscription_expires_at
+          )}`
+
+        );
+
+      }
+
+
+      // الاشتراك
+
+      if (
+        action === "subscription"
+      ) {
+
+        return ctx.reply(
+
+          `💳 نظام الاشتراك\n\n` +
+
+          `📅 الشهري: 30 يوم\n` +
+
+          `📅 السنوي: 365 يوم\n\n` +
+
+          `حالة اشتراكك: ` +
+          `${
+            isActive(user)
+              ? "فعال ✅"
+              : "منتهي ❌"
+          }\n\n` +
+
+          `ينتهي بتاريخ:\n` +
+          `${fmtDate(
+            user.subscription_expires_at
+          )}\n\n` +
+
+          `أرسل كود الاشتراك هنا لتفعيله.`
+
+        );
+
+      }
+
+
+      // الدعم
+
+      if (
+        action === "support"
+      ) {
+
+        return ctx.reply(
+          "📞 للدعم والاستفسارات تواصل مع الإدارة."
+        );
+
+      }
+
+
+      // المحاضرات
+
+      if (
+        action === "lectures"
+      ) {
+
+        if (!isActive(user)) {
+
+          return ctx.reply(
+            "🔒 تحتاج إلى اشتراك فعال لمشاهدة المحاضرات."
+          );
+
+        }
+
+
+        const lectures =
+          await q(
+            `
+            SELECT *
+
+            FROM lectures
+
+            WHERE is_active=true
+
+            ORDER BY id DESC
+
+            LIMIT 50
+            `
+          );
+
+
+        if (!lectures.length) {
+
+          return ctx.reply(
+            "📚 لا توجد محاضرات حالياً."
+          );
+
+        }
+
+
+        const buttons =
+          lectures.map(
+            lecture => [
+
+              Markup.button.callback(
+
+                `🎥 ${lecture.title}`,
+
+                `lecture:${lecture.id}`
+
+              )
+
+            ]
+          );
+
+
+        buttons.push([
+
+          Markup.button.callback(
+            "⬅️ رجوع",
+            "menu"
+          )
+
+        ]);
+
+
+        return ctx.reply(
+
+          "📚 اختر المحاضرة:",
+
+          Markup.inlineKeyboard(
+            buttons
+          )
+
+        );
+
+      }
+
+
+      // فتح المحاضرة
+
+      if (
+        action.startsWith(
+          "lecture:"
+        )
+      ) {
+
+        if (!isActive(user)) {
+
+          return ctx.reply(
+            "🔒 الاشتراك غير فعال."
+          );
+
+        }
+
+
+        const lectureId =
+          Number(
+            action.split(":")[1]
+          );
+
+
+        const lecture =
+          await one(
+            `
+            SELECT *
+
+            FROM lectures
+
+            WHERE id=$1
+
+            AND is_active=true
+            `,
+            [lectureId]
+          );
+
+
+        if (!lecture) {
+
+          return ctx.reply(
+            "❌ المحاضرة غير موجودة."
+          );
+
+        }
+
+
+        await q(
+          `
+          INSERT INTO lecture_views(
+            user_id,
+            lecture_id
+          )
+
+          VALUES(
+            $1,
+            $2
+          )
+          `,
+          [
+            user.id,
+            lectureId
+          ]
+        );
+
+
+        const link =
+          await lectureLink(
+            user.id,
+            lectureId
+          );
+
+
+        if (link) {
+
+          return ctx.reply(
+
+            `🎥 ${lecture.title}\n\n` +
+            `${lecture.description || ""}`,
+
+            Markup.inlineKeyboard([
+
+              [
+
+                Markup.button.url(
+                  "▶️ مشاهدة المحاضرة",
+                  link
+                )
+
+              ],
+
+              [
+
+                Markup.button.callback(
+                  "⬅️ المحاضرات",
+                  "lectures"
+                )
+
+              ]
+
+            ])
+
+          );
+
+        }
+
+
+        return ctx.reply(
+          `🎥 ${lecture.title}\n\n` +
+          `${lecture.file_url || "الرابط غير متوفر"}`
+        );
+
+      }
+
+
+      // الملازم
+
+      if (
+        action === "materials"
+      ) {
+
+        if (!isActive(user)) {
+
+          return ctx.reply(
+            "🔒 تحتاج إلى اشتراك فعال."
+          );
+
+        }
+
+
+        const materials =
+          await q(
+            `
+            SELECT *
+
+            FROM materials
+
+            ORDER BY id DESC
+
+            LIMIT 50
+            `
+          );
+
+
+        if (!materials.length) {
+
+          return ctx.reply(
+            "📖 لا توجد ملازم حالياً."
+          );
+
+        }
+
+
+        const text =
+          materials
+            .map(
+              (m, i) =>
+                `${i + 1}. ${m.title}\n` +
+                `${m.file_url || ""}`
+            )
+            .join("\n\n");
+
+
+        return ctx.reply(
+          `📖 الملازم:\n\n${text}`
+        );
+
+      }
+
+
+      // الامتحانات
+
+      if (
+        action === "exams"
+      ) {
+
+        if (!isActive(user)) {
+
+          return ctx.reply(
+            "🔒 تحتاج إلى اشتراك فعال."
+          );
+
+        }
+
+
+        const exams =
+          await q(
+            `
+            SELECT *
+
+            FROM exams
+
+            WHERE is_active=true
+
+            ORDER BY id DESC
+            `
+          );
+
+
+        if (!exams.length) {
+
+          return ctx.reply(
+            "📝 لا توجد امتحانات حالياً."
+          );
+
+        }
+
+
+        const buttons =
+          exams.map(
+            exam => [
+
+              Markup.button.callback(
+
+                `📝 ${exam.title} ` +
+                `(${exam.duration_minutes} دقيقة)`,
+
+                `exam:${exam.id}`
+
+              )
+
+            ]
+          );
+
+
+        buttons.push([
+
+          Markup.button.callback(
+            "⬅️ رجوع",
+            "menu"
+          )
+
+        ]);
+
+
+        return ctx.reply(
+
+          "📝 اختر الامتحان:",
+
+          Markup.inlineKeyboard(
+            buttons
+          )
+
+        );
+
+      }
+
+
+      // فتح الامتحان
+
+      if (
+        action.startsWith(
+          "exam:"
+        )
+      ) {
+
+        if (!isActive(user)) {
+
+          return ctx.reply(
+            "🔒 الاشتراك غير فعال."
+          );
+
+        }
+
+
+        const examId =
+          Number(
+            action.split(":")[1]
+          );
+
+
+        const exam =
+          await one(
+            `
+            SELECT *
+
+            FROM exams
+
+            WHERE id=$1
+
+            AND is_active=true
+            `,
+            [examId]
+          );
+
+
+        if (!exam) {
+
+          return ctx.reply(
+            "❌ الامتحان غير موجود."
+          );
+
+        }
+
+
+        const link =
+          await examLink(
+            user.id,
+            examId
+          );
+
+
+        if (!link) {
+
+          return ctx.reply(
+            "ضع BASE_URL حتى يعمل الامتحان."
+          );
+
+        }
+
+
+        return ctx.reply(
+
+          `📝 ${exam.title}\n\n` +
+
+          `${exam.description || ""}\n\n` +
+
+          `⏱ الوقت: ` +
+          `${exam.duration_minutes} دقيقة`,
+
+          Markup.inlineKeyboard([
+
+            [
+
+              Markup.button.url(
+                "🚀 بدء الامتحان",
+                link
+              )
+
+            ]
+
+          ])
+
+        );
+
+      }
+
+
+      // التحديات
+
+      if (
+        action === "challenges"
+      ) {
+
+        const challenges =
+          await q(
+            `
+            SELECT *
+
+            FROM challenges
+
+            WHERE is_active=true
+
+            AND (
+              start_at IS NULL
+              OR start_at <= NOW()
+            )
+
+            AND (
+              end_at IS NULL
+              OR end_at >= NOW()
+            )
+
+            ORDER BY id DESC
+            `
+          );
+
+
+        if (!challenges.length) {
+
+          return ctx.reply(
+            "🏆 لا توجد تحديات فعالة حالياً."
+          );
+
+        }
+
+
+        const text =
+          challenges
+            .map(
+              c =>
+                `🏆 ${c.title}\n` +
+                `${c.description || ""}\n` +
+                `🎁 الجائزة: ${
+                  c.reward || "غير محددة"
+                }`
+            )
+            .join("\n\n");
+
+
+        return ctx.reply(
+          text
+        );
+
+      }
+
+    }
+  );
+
+
+  // ===============================
+  // REDEEM SUBSCRIPTION CODE
+  // ===============================
+
+  bot.on(
+    "text",
+    async ctx => {
+
+      const user =
+        await getOrCreateUser(ctx);
+
+
+      const text =
+        (
+          ctx.message.text ||
+          ""
+        ).trim();
+
+
+      if (
+        !text ||
+        text.startsWith("/")
+      ) {
+        return;
+      }
+
+
+      if (
+        text
+          .toUpperCase()
+          .startsWith("EDU-")
+      ) {
+
+        const code =
+          text.toUpperCase();
+
+
+        const subscription =
+          await one(
+            `
+            SELECT *
+
+            FROM subscription_codes
+
+            WHERE code=$1
+
+            AND used_by IS NULL
+            `,
+            [code]
+          );
+
+
+        if (!subscription) {
+
+          return ctx.reply(
+            "❌ الكود غير صحيح أو مستخدم."
+          );
+
+        }
+
+
+        await q(
+          `
+          UPDATE subscription_codes
+
+          SET
+
+            used_by=$1,
+
+            used_at=NOW()
+
+          WHERE id=$2
+          `,
+          [
+            user.id,
+            subscription.id
+          ]
+        );
+
+
+        const current =
+          isActive(user)
+            ? new Date(
+                user.subscription_expires_at
+              )
+            : new Date();
+
+
+        const expiry =
+          new Date(
+            Math.max(
+              current.getTime(),
+              Date.now()
+            ) +
+            subscription.days *
+            86400000
+          );
+
+
+        await q(
+          `
+          UPDATE users
+
+          SET subscription_expires_at=$1
+
+          WHERE id=$2
+          `,
+          [
+            expiry,
+            user.id
+          ]
+        );
+
+
+        return ctx.reply(
+
+          `✅ تم تفعيل الاشتراك بنجاح.\n\n` +
+
+          `الخطة: ${subscription.plan}\n` +
+
+          `المدة: ${subscription.days} يوم\n\n` +
+
+          `تاريخ الانتهاء:\n` +
+
+          `${fmtDate(expiry)}`
+
+        );
+
+      }
+
+
+      await ctx.reply(
+        "اختر من القائمة:",
+        mainKeyboard()
+      );
+
+    }
+  );
+
+}
+
+
+// ===============================
+// ADMIN AUTH
+// ===============================
+
+function requireAdmin(
+  req,
+  res,
+  next
+) {
+
+  if (req.session.admin) {
+    return next();
+  }
+
+
+  return res
+    .status(401)
+    .json({
+      error: "غير مصرح"
+    });
+
+}
+
+
+// ===============================
+// HOME
+// ===============================
+
+app.get(
+  "/",
+  async (req, res) => {
+
+    const settings =
+      await getSettings();
+
+
+    res.send(`
+
+<!doctype html>
+
+<html lang="ar" dir="rtl">
+
+<head>
+
+<meta charset="utf-8">
+
+<meta
+  name="viewport"
+  content="width=device-width,initial-scale=1"
+>
+
+<title>
+${esc(settings.site_name)}
+</title>
+
+<style>
+
+body{
+
+  font-family:Arial;
+
+  background:#f5f7fb;
+
+  margin:0;
+
+  color:#111827;
+
+}
+
+.box{
+
+  max-width:700px;
+
+  margin:70px auto;
+
+  background:white;
+
+  padding:35px;
+
+  border-radius:22px;
+
+  box-shadow:
+    0 10px 35px #0001;
+
+  text-align:center;
+
+}
+
+a,button{
+
+  background:
+    ${esc(settings.primary_color)};
+
+  color:white;
+
+  border:0;
+
+  padding:13px 20px;
+
+  border-radius:12px;
+
+  text-decoration:none;
+
+  display:inline-block;
+
+}
+
+</style>
+
+</head>
+
+<body>
+
+<div class="box">
+
+<h1>
+🎓 ${esc(settings.site_name)}
+</h1>
+
+<p>
+${esc(settings.welcome)}
+</p>
+
+<a href="/admin">
+🔐 لوحة الإدارة
+</a>
+
+</div>
+
+</body>
+
+</html>
+
+`);
+
+  }
+);
+
+
+// ===============================
+// ADMIN LOGIN
+// ===============================
+
+app.get(
+  "/admin",
+  (req, res) => {
+
+    if (
+      !req.session.admin
+    ) {
+
+      return res.send(
+        loginHTML()
+      );
+
+    }
+
+
+    res.send(
+      adminHTML()
+    );
+
+  }
+);
+
+
+app.post(
+  "/admin/login",
+  (req, res) => {
+
+    const {
+      username,
+      password
+    } = req.body;
+
+
+    if (
+      username ===
+        ADMIN_USERNAME &&
+
+      password ===
+        ADMIN_PASSWORD
+    ) {
+
+      req.session.admin = true;
+
+      return res.redirect(
+        "/admin"
+      );
+
+    }
+
+
+    res
+      .status(401)
+      .send(
+        loginHTML(
+          "بيانات الدخول غير صحيحة"
+        )
+      );
+
+  }
+);
+
+
+app.post(
+  "/admin/logout",
+  (req, res) => {
+
+    req.session.destroy(
+      () => res.redirect("/admin")
+    );
+
+  }
+);
+
+
+// ===============================
+// DASHBOARD STATS
+// ===============================
+
+app.get(
+  "/api/stats",
+  requireAdmin,
+  async (req, res) => {
+
+    const users =
+      await one(
+        `
+        SELECT COUNT(*)::int AS n
+
+        FROM users
+        `
+      );
+
+
+    const active =
+      await one(
+        `
+        SELECT COUNT(*)::int AS n
+
+        FROM users
+
+        WHERE subscription_expires_at > NOW()
+        `
+      );
+
+
+    const lectures =
+      await one(
+        `
+        SELECT COUNT(*)::int AS n
+
+        FROMapp.post(
+  "/api/users/:id/block",
