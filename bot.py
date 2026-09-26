@@ -13,7 +13,7 @@ const path = require("path");
 const app = express();
 
 const PORT = process.env.PORT || 10000;
-const BASE_URL = (process.env.BASE_URL || "1792685788").replace(/\/$/, "");
+const BASE_URL = (process.env.BASE_URL || "").replace(/\/$/, "");
 const BOT_TOKEN = process.env.BOT_TOKEN || "6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s";
 
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "1792685788";
@@ -1968,5 +1968,27 @@ app.get(
         `
         SELECT COUNT(*)::int AS n
 
-        FROMapp.post(
-  "/api/users/:id/block",
+        FROM lectures
+        `
+      );
+
+    res.json({
+      users: users.n,
+      active: active.n,
+      lectures: lectures.n
+    });
+
+  }
+);
+
+
+// تشغيل الخادم
+initDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Server is running on port ${PORT}`);
+    if (bot) {
+      bot.launch();
+      console.log("Telegram bot started.");
+    }
+  });
+});
