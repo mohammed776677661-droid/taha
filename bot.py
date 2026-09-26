@@ -5,50 +5,42 @@ from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
-# إعداد السجلات
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 TOKEN = os.getenv("6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s")
 ADMIN_ID = os.getenv("1792685788")
 
-# قواعد البيانات المؤقتة
-students_db = {}
 attendance_db = {}
 exams_keys = {}
 
 stages_content = {
-    "primary": {
-        "name": "📖 المرحلة الابتدائية",
-        "notes": "📚 **ملازم المرحلة الابتدائية:**\n- ملازم الصف السادس الابتدائي الشاملة\n- ملازم الرياضيات والاجتماعيات والعلوم"
-    },
-    "intermediate": {
-        "name": "📖 المرحلة المتوسطة",
-        "notes": "📚 **ملازم المرحلة المتوسطة:**\n- ملازم الأول والثاني والثالث المتوسط\n- ملازم الفيزياء والكيمياء"
-    },
-    "secondary": {
-        "name": "📖 المرحلة الإعدادية",
-        "notes": "📚 **ملازم المرحلة الإعدادية:**\n- ملازم السادس العلمي والادبي\n- ملزمة الأحياء، الفيزياء، والرياضيات"
-    }
+    "primary": {"name": "📖 المرحلة الابتدائية", "notes": "📚 ملازم المرحلة الابتدائية الشاملة"},
+    "intermediate": {"name": "📖 المرحلة المتوسطة", "notes": "📚 ملازم المرحلة المتوسطة الشاملة"},
+    "secondary": {"name": "📖 المرحلة الإعدادية", "notes": "📚 ملازم المرحلة الإعدادية الشاملة"}
 }
 
-# سيرفر ويب وهمي للحفاظ على تشغيل البوت على Render وعدم توقفه
+# سيرفر ويب للحفاظ على عمل البوت على Render
 app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Bot is running actively!"
+    return "Bot is active and running!"
 
 def run_flask():
     app_flask.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
-# أمر البدء التسجيلي الإجباري
+# أمر الفحص السريع للتأكد أن البوت يعمل
+async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🏓 **البوت شغال وبأفضل حال! ✅**\nالمنصة التعليمية تعمل ومستعدة لاستقبال الأوامر.")
+
+# أمر البدء والتسجيل الإجباري
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in attendance_db:
         context.user_data['reg_step'] = 'name'
         await update.message.reply_text(
             "🌟 **أهلاً بك في منصة الملازم التعليمية الشاملة**\n\n"
-            "🛑 التسجيل إجباري للمتابعة واستخدام البوت.\n"
+            "🛑 التسجيل إجباري للمتابعة.\n"
             "يرجى إرسال **اسمك الثلاثي** الآن:"
         )
         return
@@ -76,11 +68,10 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "school": text
         }
         context.user_data['reg_step'] = None
-        await update.message.reply_text("✅ **تم تسجيل حضورك بنجاح في سجلات المنصة!**")
+        await update.message.reply_text("✅ **تم تسجيل حضورك بنجاح!**")
         await show_main_menu_message(update, context)
         return
 
-    # وظائف الآدمن والتصحيح الذكي
     if ADMIN_ID and str(user_id) == str(ADMIN_ID):
         if context.user_data.get('waiting_for_key'):
             stage = context.user_data.get('target_stage', 'secondary')
@@ -99,7 +90,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"🤖 **تقرير التصحيح الذكي (AI):**\n\n"
                 f"👤 إجابة الطالب: `{text}`\n"
-                f"📋 الإجابة النموذجية: `{teacher_key}`\n"
+                f"📋 إجابة الأستاذ: `{teacher_key}`\n"
                 f"📊 نسبة التطابق: **{match_pct}**\n"
                 f"🏆 التقييم: **{score}**",
                 parse_mode="Markdown"
@@ -120,7 +111,7 @@ async def show_main_menu_message(update: Update, context: ContextTypes.DEFAULT_T
     ]
     user_id = update.effective_user.id
     if ADMIN_ID and str(user_id) == str(ADMIN_ID):
-        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المشرف والإحصائيات", callback_data="admin_panel")])
+        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المشرف", callback_data="admin_panel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("🎓 **القائمة الرئيسية - منصة الملازم التعليمية:**", reply_markup=reply_markup, parse_mode="Markdown")
 
@@ -132,7 +123,7 @@ async def show_main_menu_callback(query, context):
     ]
     user_id = query.from_user.id
     if ADMIN_ID and str(user_id) == str(ADMIN_ID):
-        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المشرف والإحصائيات", callback_data="admin_panel")])
+        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المشرف", callback_data="admin_panel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.message.edit_text("🎓 **القائمة الرئيسية - منصة الملازم التعليمية:**", reply_markup=reply_markup, parse_mode="Markdown")
 
@@ -204,15 +195,17 @@ def main():
         print("خطأ: يرجى ضبط متغير البيئة BOT_TOKEN!")
         return
 
-    # تشغيل سيرفر الويب الخلفي لضمان عدم توقف البوت على Render
     Thread(target=run_flask).start()
 
     app = ApplicationBuilder().token(TOKEN).build()
+    
+    # إضافة معالجات الأوامر والرسائل
+    app.add_handler(CommandHandler("ping", ping_command))  # أمر الفحص السريع
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    print("المنصة التعليمية تعمل الآن بنجاح تامة...")
+    print("المنصة التعليمية تعمل بكفاءة تامة...")
     app.run_polling()
 
 if __name__ == "__main__":
