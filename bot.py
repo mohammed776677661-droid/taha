@@ -16,7 +16,7 @@ const PORT = process.env.PORT || 10000;
 const BASE_URL = (process.env.BASE_URL || "1792685788").replace(/\/$/, "");
 const BOT_TOKEN = process.env.BOT_TOKEN || "6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s";
 
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "1792685788";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "change-me";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
