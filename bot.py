@@ -9,8 +9,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 # ضع توكن بوتك الحقيقي هنا مباشرة بين علامتي التنصيص
-TOKEN = "ضع_التوكن_هنا_بين_العلامتين"
-ADMIN_ID = "ضع_آيدي_الآدمن_هنا" # ضع آيدي حسابك هنا حصراً للتحكم الكامل
+TOKEN = "6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s"
+ADMIN_ID = "1792685788" # ضع آيدي حسابك هنا حصراً للتحكم الكامل
 
 # قواعد البيانات الديناميكية
 attendance_db = {}
