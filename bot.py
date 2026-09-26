@@ -10,8 +10,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 # 🛑 ضع توكن بوتك وحساب المطور هنا
-TOKEN = "6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s"
-ADMIN_ID = "1792685788"
+TOKEN = "ضع_التوكن_هنا_بين_العلامتين"
+ADMIN_ID = "ضع_آيدي_الآدمن_هنا"
 
 stats_data = {
     "total_messages": 0,
@@ -20,11 +20,26 @@ stats_data = {
 
 attendance_db = {}
 active_subscriptions = {}
-student_views = {}  # مشاهدات المحاضرات
-student_points = {} # نقاط XP الأسطورية
+student_views = {}
+student_points = {}
 generated_codes = {"monthly": [], "yearly": []}
 
-# بنك الأسئلة الذكي المحدث
+# قواعد البيانات الديناميكية القابلة للتعديل الكامل من داخل البوت
+dynamic_stages = {
+    "primary": {
+        "name": "📖 المرحلة الابتدائية",
+        "lectures": [{"title": "🎬 محاضرة الرياضيات - الأساسية", "url": "https://t.me/c/0/0"}]
+    },
+    "intermediate": {
+        "name": "📖 المرحلة المتوسطة",
+        "lectures": [{"title": "🎬 محاضرة الفيزياء والكيمياء", "url": "https://t.me/c/0/0"}]
+    },
+    "secondary": {
+        "name": "📖 المرحلة الإعدادية",
+        "lectures": [{"title": "🎬 محاضرة الأحياء - التكاثر", "url": "https://t.me/c/0/0"}]
+    }
+}
+
 science_questions_bank = [
     {
         "q": "🧠 ما هو بيت الطاقة الرئيسي داخل الخلية الحية؟",
@@ -33,80 +48,46 @@ science_questions_bank = [
     {
         "q": "⚗️ ما هي وحدة قياس التيار الكهربائي في النظام الدولي؟",
         "options": [("❌ الفولت", False), ("✅ الأمبير", True), ("❌ الأوم", False)]
-    },
-    {
-        "q": "🔢 ما هو الناتج الصحيح لجذر العدد 144؟",
-        "options": [("❌ 10", False), ("✅ 12", True), ("❌ 14", False)]
-    },
-    {
-        "q": "🧬 المسؤول عن نقل الصفات الوراثية داخل الخلية هو:",
-        "options": [("✅ حمض DNA", True), ("❌ البروتينات", False), ("❌ السكريات", False)]
     }
 ]
-
-# المحاضرات للمراحل الدراسية
-stages_content = {
-    "primary": {
-        "name": "📖 المرحلة الابتدائية",
-        "lectures": [
-            {"title": "🎬 محاضرة الرياضيات - الدرس الأول", "url": "https://t.me/c/0/0"},
-            {"title": "🎬 محاضرة القواعد والإنكليزي", "url": "https://t.me/c/0/0"}
-        ]
-    },
-    "intermediate": {
-        "name": "📖 المرحلة المتوسطة",
-        "lectures": [
-            {"title": "🎬 محاضرة الفيزياء والكيمياء", "url": "https://t.me/c/0/0"},
-            {"title": "🎬 محاضرة الرياضيات الحديثة", "url": "https://t.me/c/0/0"}
-        ]
-    },
-    "secondary": {
-        "name": "📖 المرحلة الإعدادية",
-        "lectures": [
-            {"title": "🎬 محاضرة الأحياء - التكاثر", "url": "https://t.me/c/0/0"},
-            {"title": "🎬 محاضرة الفيزياء - المتناوب", "url": "https://t.me/c/0/0"}
-        ]
-    }
-}
 
 app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Ultra Educational Platform Bot is running perfectly!"
+    return "Ultimate CMS Educational Bot is running perfectly!"
 
 def run_flask():
     app_flask.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
-# الواجهة الرئيسية السفلية الخارقة
 def get_main_reply_keyboard(is_admin=False):
     keyboard = [
-        [KeyboardButton("📚 قسم المحاضرات والملازم"), KeyboardButton("🏆 لوحة المتصدرين وشرف الأبطال")],
-        [KeyboardButton("🤖 الأستاذ الذكي الخصوصي (AI)"), KeyboardButton("📜 شهادة التقدير الإلكترونية")],
+        [KeyboardButton("📚 قسم المحاضرات والملازم"), KeyboardButton("🏆 لوحة المتصدرين والأبطال")],
+        [KeyboardButton("🤖 الأستاذ الذكي (AI)"), KeyboardButton("📜 شهادة التقدير الإلكترونية")],
         [KeyboardButton("💎 تفعيل كود الاشتراك"), KeyboardButton("👤 ملفي وسجل الحضور")],
         [KeyboardButton("🎮 الألعاب والتحديات الفورية")]
     ]
     if is_admin:
-        keyboard.append([KeyboardButton("⚙️ لوحة تحكم المطور والإحصائيات الخارقة")])
+        keyboard.append([KeyboardButton("⚙️ لوحة تحكم المطور والـ CMS الشاملة")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏓 **المنصة الخارقة تعمل بكفاءة تامة وبأفضل حال! ✅**")
+    await update.message.reply_text("🏓 **المنصة تعمل بكفاءة تامة وبأفضل حال! ✅**")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in attendance_db:
         context.user_data['reg_step'] = 'name'
         await update.message.reply_text(
-            "🌟 **أهلاً بك في المنصة التعليمية العراقية الذكية (نسخة الجيل القادم)**\n\n"
-            "🎁 **هدية ترحيبية خيالية:** ستحصل فوراً على اشتراك مجاني لمدة **30 يوماً** مع 50 نقطة تفاعل أولية!\n\n"
+            "🌟 **أهلاً بك في المنصة التعليمية العراقية الذكية**\n\n"
+            "🎁 **هدية ترحيبية:** ستحصل فوراً على اشتراك مجاني لمدة **30 يوماً** + 50 نقطة XP!\n\n"
             "يرجى إرسال **اسمك الثلاثي** الآن للبدء:"
         )
         return
     
     is_admin = (ADMIN_ID and str(user_id) == str(ADMIN_ID))
     await update.message.reply_text(
-        "🎓 **القائمة الرئيسية - اختر القسم المطلوب من الكيبورد السفلي:**",
+        "🎓 **القائمة الرئيسية - اختر القسم المطلوب:**",
         reply_markup=get_main_reply_keyboard(is_admin)
     )
 
@@ -117,21 +98,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     step = context.user_data.get('reg_step')
     is_admin = (ADMIN_ID and str(user_id) == str(ADMIN_ID))
 
-    # معالجة الأزرار السفلية الخارقة
+    # معالجة أزرار الواجهة
     if text == "📚 قسم المحاضرات والملازم":
-        keyboard = [
-            [InlineKeyboardButton("📖 المرحلة الابتدائية", callback_data="lect_primary")],
-            [InlineKeyboardButton("📖 المرحلة المتوسطة", callback_data="lect_intermediate")],
-            [InlineKeyboardButton("📖 المرحلة الإعدادية", callback_data="lect_secondary")]
-        ]
-        await update.message.reply_text("📚 **اختر المرحلة الدراسية لاستعراض المحاضرات والدروس المباشرة:**", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [[InlineKeyboardButton(data["name"], callback_data=f"lect_{key}")] for key, data in dynamic_stages.items()]
+        keyboard.append([InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu_cb")])
+        await update.message.reply_text("📚 **اختر المرحلة الدراسية لاستعراض المحاضرات:**", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    elif text == "🏆 لوحة المتصدرين وشرف الأبطال":
+    elif text == "🏆 لوحة المتصدرين والأبطال":
         sorted_students = sorted(student_views.items(), key=lambda x: x[1], reverse=True)[:10]
-        leaderboard_text = "🏆 **قائمة أساطير العراق التعليمية (أكثر الطلاب تفاعلاً ومشاهدة):**\n\n"
+        leaderboard_text = "🏆 **قائمة أساطير العراق التعليمية:**\n\n"
         if not sorted_students:
-            leaderboard_text += "القائمة فارغة حالياً. كن أنت أسطورة الأسبوع! 🌟"
+            leaderboard_text += "القائمة فارغة حالياً. كن البطل الأول! 🌟"
         else:
             for idx, (uid, views) in enumerate(sorted_students, 1):
                 s_name = attendance_db.get(uid, {}).get("name", "طالب مجهول")
@@ -140,126 +118,106 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(leaderboard_text, parse_mode="Markdown")
         return
 
-    elif text == "🤖 الأستاذ الذكي الخصوصي (AI)":
+    elif text == "🤖 الأستاذ الذكي (AI)":
         context.user_data['waiting_for_ai_question'] = True
-        await update.message.reply_text(
-            "🤖 **أهلاً بك في غرفة الأستاذ الذكي الخصوصي (AI Tutor):**\n\n"
-            "اكتب الآن أي سؤال صعب واجهك في (الرياضيات، الأحياء، الفيزياء، الكيمياء) وسيقوم النظام بشرحه لك فوراً بالتفصيل الممل:",
-            reply_markup=ReplyKeyboardMarkup([["❌ إنهاء جلسة الأستاذ الذكي"]], resize_keyboard=True)
-        )
+        await update.message.reply_text("🤖 **الأستاذ الذكي الخصوصي:**\nاكتب أي سؤال علمي واجهك (رياضيات، فيزياء، أحياء...) وسأشرحه لك فوراً:", reply_markup=ReplyKeyboardMarkup([["❌ إنهاء جلسة الأستاذ الذكي"]], resize_keyboard=True))
         return
 
     elif text == "❌ إنهاء جلسة الأستاذ الذكي":
         context.user_data['waiting_for_ai_question'] = False
-        await update.message.reply_text("✅ تم إنهاء جلسة الأستاذ الذكي بنجاح.", reply_markup=get_main_reply_keyboard(is_admin))
+        await update.message.reply_text("✅ تم الإنهاء.", reply_markup=get_main_reply_keyboard(is_admin))
         return
 
     elif text == "📜 شهادة التقدير الإلكترونية":
         info = attendance_db.get(user_id, {"name": "طالب مجتهد", "province": "العراق", "school": "المنصة الذكية"})
         pts = student_points.get(user_id, 0)
-        cert_text = (
-            f"╔═══════════════════════╗\n"
-            f"      🌟 **شهادة تفوق وتقدير رسمي** 🌟\n"
-            f"╚═══════════════════════╝\n\n"
-            f"تعلن إدارة المنصة التعليمية العراقية عن منح هذه الشهادة إلى الطالب البطل:\n"
-            f"📌 **{info['name']}**\n"
-            f"🏫 المدرسة: `{info['school']}` — المحافظة: `{info['province']}`\n\n"
-            f"وذلك لتفوقه المستمر وجمعـه لـ **{pts} نقطة تفاعل (XP)** في المنصة.\n\n"
-            f"🎖️ *استمر في تألقك لتكون صدارة جيل المستقبل!*"
-        )
-        await update.message.reply_text(cert_text, parse_mode="Markdown")
+        cert = f"╔═══════════════════════╗\n      🌟 **شهادة تقدير وتفوق رسمي** 🌟\n╚═══════════════════════╝\n\nتعلن المنصة عن منح الشهادة إلى البطل:\n📌 **{info['name']}**\n🏫 المدرسة: `{info['school']}`\n⚡ نقاط التفاعل: `{pts} XP`"
+        await update.message.reply_text(cert, parse_mode="Markdown")
         return
 
     elif text == "💎 تفعيل كود الاشتراك":
         context.user_data['entering_sub_code'] = True
-        await update.message.reply_text("💎 **تفعيل كود الاشتراك الذكي:**\n\nأرسل الكود (الشهري أو السنوي) لتفعيله في حسابك وتمديد عضويتك فوراً:")
+        await update.message.reply_text("💎 **تفعيل كود الاشتراك:**\nأرسل الكود (الشهري أو السنوي) لتفعيله فوراً:")
         return
 
     elif text == "👤 ملفي وسجل الحضور":
         info = attendance_db.get(user_id, {"name": "غير مسجل", "province": "-", "school": "-"})
         sub = active_subscriptions.get(user_id, "تجريبي مجاني (30 يوم) 🎁")
-        views_count = student_views.get(user_id, 0)
-        points = student_points.get(user_id, 0)
-        
-        # الرتبة الأسطورية حسب النقاط الخارقة
-        rank_title = "مبتدئ طموح 📖"
-        if points >= 100: rank_title = "طالب مجتهد وذكي ⭐"
-        if points >= 250: rank_title = "بطل المحافظة التعليمي 🏆"
-        if points >= 500: rank_title = "أساطير وعباقرة العراق 🧠💎👑"
-
-        await update.message.reply_text(
-            f"👤 **الملف الشخصي وسجل الحضور الأكاديمي:**\n\n"
-            f"▫️ الاسم: `{info['name']}`\n"
-            f"▫️ المحافظة: `{info['province']}`\n"
-            f"▫️ المدرسة: `{info['school']}`\n"
-            f"▫️ الاشتراك: **{sub}**\n"
-            f"▫️ رتبة الشرف: **{rank_title}**\n"
-            f"▫️ نقاط التفاعل (`XP`): **{points} نقطة**\n"
-            f"▫️ مشاهدات المحاضرات: `👁‍🗨 {views_count} مشاهدة`",
-            parse_mode="Markdown"
-        )
+        pts = student_points.get(user_id, 0)
+        await update.message.reply_text(f"👤 **ملفك الشخصي:**\n\n▫️ الاسم: `{info['name']}`\n▫️ المحافظة: `{info['province']}`\n▫️ المدرسة: `{info['school']}`\n▫️ الاشتراك: **{sub}**\n▫️ النقاط: `{pts} XP`", parse_mode="Markdown")
         return
 
     elif text == "🎮 الألعاب والتحديات الفورية":
-        await update.message.reply_text(
-            "🎮 **قسم المسابقات العلمية الحية:**\nاختر التحدي لاختبار معلوماتك وكسب نقاط XP إضافية:",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 ابدأ تحدي الأسئلة العشوائية الفورية", callback_data="play_next_question")]])
-        )
+        await update.message.reply_text("🎮 **قسم المسابقات العلمية الحية:**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🚀 ابدأ التحدي العشوائي", callback_data="play_next_question")]]))
         return
 
-    elif text == "⚙️ لوحة تحكم المطور والإحصائيات الخارقة" and is_admin:
-        total_u = len(attendance_db)
-        admin_panel_text = (
-            f"⚙️ **لوحة التحكم والإحصائيات الخارقة:**\n\n"
-            f"👥 إجمالي الطلاب المسجلين: `{total_u}`\n"
-            f"💬 رسائل النظام الكلية: `{stats_data['total_messages']}`\n"
-            f"🔒 الحماية المشفرة للبث والمحتوى: **مفعل 100% 🛡️**\n\n"
-            f"اختر العملية المطلوبة:"
-        )
+    elif text == "⚙️ لوحة تحكم المطور والـ CMS الشاملة" and is_admin:
+        panel_text = f"⚙️ **لوحة التحكم الإدارية الداخلية (CMS):**\n\n👥 الطلاب المسجلين: `{len(attendance_db)}`\n💬 رسائل البوت: `{stats_data['total_messages']}`\n\nاختر العملية الإدارية المطلوبة:"
         keyboard = [
-            [InlineKeyboardButton("📢 إرسال إعلان عام فوري للجميع", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("🎟 توليد أكواد اشتراك جديدة (شهري/سنوي)", callback_data="admin_gen_code")],
-            [InlineKeyboardButton("📋 عرض كشوفات وسجلات الحضور", callback_data="admin_show_logs")]
+            [InlineKeyboardButton("➕ إضافة مرحلة أو قسم جديد", callback_data="cms_add_stage")],
+            [InlineKeyboardButton("📚 إضافة محاضرة/ملزمة لقسم", callback_data="cms_add_lecture")],
+            [InlineKeyboardButton("🎟 توليد كود اشتراك جديد", callback_data="admin_gen_code")],
+            [InlineKeyboardButton("📢 إرسال إعلان عام للجميع", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("📋 عرض كشوفات الطلاب", callback_data="admin_show_logs")]
         ]
-        await update.message.reply_text(admin_panel_text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text(panel_text, reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # استجابة الأستاذ الذكي الفورية (AI Tutor Simulation)
+    # معالجة المدخلات الديناميكية للوحة التحكم (CMS)
+    if is_admin and context.user_data.get('cms_step') == 'getting_stage_id':
+        key = text.strip().lower()
+        context.user_data['temp_stage_key'] = key
+        context.user_data['cms_step'] = 'getting_stage_name'
+        await update.message.reply_text(f"📍 ممتاز. الآن أرسل **اسم القسم الظاهري** (مثلاً: 📖 المرحلة الابتدائية):")
+        return
+
+    elif is_admin and context.user_data.get('cms_step') == 'getting_stage_name':
+        s_name = text.strip()
+        s_key = context.user_data.get('temp_stage_key')
+        dynamic_stages[s_key] = {"name": s_name, "lectures": []}
+        context.user_data['cms_step'] = None
+        await update.message.reply_text(f"✅ تم إضافة القسم الجديد ({s_name}) بنجاح وتفعيله في البوت فوراً!", reply_markup=get_main_reply_keyboard(is_admin))
+        return
+
+    elif is_admin and context.user_data.get('cms_step') == 'getting_lect_title':
+        context.user_data['temp_lect_title'] = text.strip()
+        context.user_data['cms_step'] = 'getting_lect_url'
+        await update.message.reply_text("🔗 الآن أرسل **رابط المحاضرة أو الملزمة** (رابط مباشر أو تليجرام):")
+        return
+
+    elif is_admin and context.user_data.get('cms_step') == 'getting_lect_url':
+        l_url = text.strip()
+        l_title = context.user_data.get('temp_lect_title')
+        s_key = context.user_data.get('temp_target_stage')
+        if s_key in dynamic_stages:
+            dynamic_stages[s_key]["lectures"].append({"title": l_title, "url": l_url})
+            context.user_data['cms_step'] = None
+            await update.message.reply_text(f"✅ تم إضافة المحاضرة ({l_title}) بنجاح إلى القسم المطلوب!", reply_markup=get_main_reply_keyboard(is_admin))
+        else:
+            await update.message.reply_text("❌ حدث خطأ، القسم غير موجود.")
+        return
+
     if context.user_data.get('waiting_for_ai_question'):
-        ai_responses = [
-            f"🤖 **شرح الأستاذ الذكي لسؤالك:**\n\nبناءً على تحليلي العلمي لسؤالك (`{text}`):\n1. القاعدة الأساسية تعتمد على القوانين الفيزيائية/الرياضية المعيارية.\n2. يتم تطبيق المعطيات بخطوات متسلسلة لضمان الوصول للناتج الدقيق.\n💡 *نصيحة أستاذك: راجع الفصل المتعلق بهذا الموضوع في ملزمة المنصة لتثبت المعلومة أكثر!*",
-            f"🤖 **إجابة الأستاذ الذكي الشاملة:**\n\nسؤال ممتاز جداً! لتحليل `{text}`:\n• الخطوة الأولى: استخراج المعطيات والمجهول.\n• الخطوة الثانية: اختيار القانون الصحيح والتطبيق المباشر.\n🏆 *أحسنت طرح السؤال، استمر بفضولك العلمي!*"
-        ]
-        student_points[user_id] = student_points.get(user_id, 0) + 5
-        await update.message.reply_text(random.choice(ai_responses), parse_mode="Markdown")
+        await update.message.reply_text(f"🤖 **إجابة الأستاذ الذكي:**\n\nبناءً على سؤالك (`{text}`): القاعدة العلمية واضحة وتتطلب تطبيق المعطيات بخطوات دقيقة. استمر في التفوق!", parse_mode="Markdown")
         return
 
-    # معالجة خطوات التسجيل
     if step == 'name':
         context.user_data['temp_name'] = text
         context.user_data['reg_step'] = 'province'
-        await update.message.reply_text("📍 ممتاز. الآن أرسل **اسم المحافظة** (مثلاً: بغداد، البصرة، أربيل...):")
+        await update.message.reply_text("📍 أرسل **اسم المحافظة**:")
         return
     elif step == 'province':
         context.user_data['temp_province'] = text
         context.user_data['reg_step'] = 'school'
-        await update.message.reply_text("🏫 أخيراً، أرسل **اسم المدرسة**:")
+        await update.message.reply_text("🏫 أرسل **اسم المدرسة**:")
         return
     elif step == 'school':
-        attendance_db[user_id] = {
-            "name": context.user_data.get('temp_name'),
-            "province": context.user_data.get('temp_province'),
-            "school": text
-        }
+        attendance_db[user_id] = {"name": context.user_data.get('temp_name'), "province": context.user_data.get('temp_province'), "school": text}
         expire_date = datetime.now() + timedelta(days=30)
         active_subscriptions[user_id] = f"هدية مجانية لغاية {expire_date.strftime('%Y-%m-%d')} 🎁"
-        student_points[user_id] = 50 # هدية 50 نقطة ترحيبية
+        student_points[user_id] = 50
         context.user_data['reg_step'] = None
-        
-        await update.message.reply_text(
-            "✅ **تم تسجيلك بنجاح! تم إضافتك لقاعدة الأبطال ومنحك 30 يوماً هدية + 50 نقطة XP!** 🎉",
-            reply_markup=get_main_reply_keyboard(is_admin)
-        )
+        await update.message.reply_text("✅ **تم تسجيلك بنجاح ومنحك هدية 30 يوماً!** 🎉", reply_markup=get_main_reply_keyboard(is_admin))
         return
 
     if context.user_data.get('entering_sub_code'):
@@ -269,14 +227,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             active_subscriptions[user_id] = "اشتراك شهري مفعل ⭐️"
             generated_codes["monthly"].remove(code)
             student_points[user_id] = student_points.get(user_id, 0) + 100
-            await update.message.reply_text("🎉 **مبروك! تم تفعيل اشتراكك الشهري بنجاح (+100 نقطة XP).**")
+            await update.message.reply_text("🎉 **تم تفعيل اشتراكك الشهري بنجاح!**")
         elif code in generated_codes["yearly"]:
-            active_subscriptions[user_id] = "اشتراك سنوي شامل مفعل 💎"
+            active_subscriptions[user_id] = "اشتراك سنوي مفعل 💎"
             generated_codes["yearly"].remove(code)
             student_points[user_id] = student_points.get(user_id, 0) + 300
-            await update.message.reply_text("💎 **مبروك! تم تفعيل اشتراكك السنوي الشامل بنجاح (+300 نقطة XP).**")
+            await update.message.reply_text("💎 **تم تفعيل اشتراكك السنوي بنجاح!**")
         else:
-            await update.message.reply_text("❌ **عذراً، الكود غير صالح أو تم استخدامه مسبقاً.**")
+            await update.message.reply_text("❌ **الكود غير صالح أو مستخدم مسبقاً.**")
         return
 
     if is_admin and context.user_data.get('broadcasting'):
@@ -284,15 +242,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = 0
         for uid in attendance_db.keys():
             try:
-                await context.bot.send_message(chat_id=uid, text=f"📢 **إعلان هام من إدارة المنصة:**\n\n{text}")
+                await context.bot.send_message(chat_id=uid, text=f"📢 **إعلان هام:**\n\n{text}")
                 count += 1
             except:
                 pass
-        await update.message.reply_text(f"✅ تم إرسال الإعلان الفوري بنجاح إلى {count} طالب.")
+        await update.message.reply_text(f"✅ تم الإرسال إلى {count} طالب.")
         return
 
     if user_id in attendance_db:
-        await update.message.reply_text("يرجى استخدام الأزرار السفلية الخارقة للتنقل:", reply_markup=get_main_reply_keyboard(is_admin))
+        await update.message.reply_text("يرجى استخدام الأزرار السفلية:", reply_markup=get_main_reply_keyboard(is_admin))
     else:
         await start(update, context)
 
@@ -304,76 +262,71 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("lect_"):
         stage_key = data.replace("lect_", "")
-        lectures = stages_content[stage_key]["lectures"]
-        
+        stage_info = dynamic_stages.get(stage_key)
+        if not stage_info:
+            await query.message.edit_text("❌ القسم غير موجود.")
+            return
+            
         student_views[user_id] = student_views.get(user_id, 0) + 1
         student_points[user_id] = student_points.get(user_id, 0) + 10
         
-        text = f"🎬 **محاضرات {stages_content[stage_key]['name']}:**\n\n"
-        text += "⚡ **بث فوري مباشر آمن بدون تحميل (+10 نقاط XP):**\n\n"
-        
-        keyboard = []
-        for lect in lectures:
-            keyboard.append([InlineKeyboardButton(lect["title"], url=lect["url"])])
-        
+        text = f"🎬 **{stage_info['name']}:**\n\n⚡ بث فوري مباشر آمن:\n\n"
+        keyboard = [[InlineKeyboardButton(lect["title"], url=lect["url"])] for lect in stage_info["lectures"]]
         keyboard.append([InlineKeyboardButton("🔙 رجوع للأقسام", callback_data="back_to_lectures")])
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
     elif data == "back_to_lectures":
-        keyboard = [
-            [InlineKeyboardButton("📖 المرحلة الابتدائية", callback_data="lect_primary")],
-            [InlineKeyboardButton("📖 المرحلة المتوسطة", callback_data="lect_intermediate")],
-            [InlineKeyboardButton("📖 المرحلة الإعدادية", callback_data="lect_secondary")]
-        ]
-        await query.message.edit_text("📚 **اختر المرحلة الدراسية لاستعراض المحاضرات:**", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [[InlineKeyboardButton(d["name"], callback_data=f"lect_{k}")] for k, d in dynamic_stages.items()]
+        await query.message.edit_text("📚 **اختر المرحلة الدراسية:**", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data == "cms_add_stage":
+        context.user_data['cms_step'] = 'getting_stage_id'
+        await query.message.edit_text("➕ أرسل الآن **معرف القسم بالإنجليزية** (مثلاً: `university` أو `third_grade` بدون مسافات):")
+
+    elif data == "cms_add_lecture":
+        if not dynamic_stages:
+            await query.message.edit_text("❌ لا توجد أقسام مضافة حالياً. أضف قسماً أولاً.")
+            return
+        keyboard = [[InlineKeyboardButton(d["name"], callback_data=f"select_stage_{k}")] for k, d in dynamic_stages.items()]
+        await query.message.edit_text("📚 اختر القسم الذي تريد إضافة المحاضرة إليه:", reply_markup=InlineKeyboardMarkup(keyboard))
+
+    elif data.startswith("select_stage_"):
+        s_key = data.replace("select_stage_", "")
+        context.user_data['temp_target_stage'] = s_key
+        context.user_data['cms_step'] = 'getting_lect_title'
+        await query.message.edit_text("✍️ أرسل الآن **عنوان المحاضرة أو الملزمة**:")
 
     elif data == "play_next_question":
         q_item = random.choice(science_questions_bank)
         options = q_item["options"]
         random.shuffle(options)
-        
-        keyboard = []
-        for opt_text, is_correct in options:
-            cb = "game_win" if is_correct else "game_loss"
-            keyboard.append([InlineKeyboardButton(opt_text, callback_data=cb)])
-        keyboard.append([InlineKeyboardButton("⏭ سؤال فوري آخر", callback_data="play_next_question")])
-        
-        await query.message.edit_text(f"🎯 **تحدي الذكاء الفوري:**\n\n{q_item['q']}", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [[InlineKeyboardButton(opt_text, callback_data="game_win" if is_c else "game_loss")] for opt_text, is_c in options]
+        keyboard.append([InlineKeyboardButton("⏭ سؤال آخر", callback_data="play_next_question")])
+        await query.message.edit_text(f"🎯 **تحدي الذكاء:**\n\n{q_item['q']}", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "game_win":
         student_points[user_id] = student_points.get(user_id, 0) + 20
-        keyboard = [
-            [InlineKeyboardButton("🏆 لعب سؤالاً جديداً (+20 XP)", callback_data="play_next_question")],
-            [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu_cb")]
-        ]
-        await query.message.edit_text("🌟 **كفو! إجابة صحيحة خارقة (+20 نقطة XP) 👏**", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text("🌟 **إجابة صحيحة (+20 XP)!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏆 لعب مجدداً", callback_data="play_next_question")]]))
 
     elif data == "game_loss":
-        keyboard = [
-            [InlineKeyboardButton("🔄 حاول مرة أخرى", callback_data="play_next_question")],
-            [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu_cb")]
-        ]
-        await query.message.edit_text("❌ **عفواً، إجابة غير دقيقة! حاول في التحدي القادم.**", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text("❌ **إجابة خاطئة!**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 محاولة أخرى", callback_data="play_next_question")]]))
 
-    elif data == "main_menu_cb":
-        await query.message.edit_text("🎓 تم العودة للقائمة. استعمل الأزرار السفلية للتنقل.")
+    elif data == "admin_gen_code":
+        m_code = f"CMS-M-{random.randint(1000, 9999)}"
+        y_code = f"CMS-Y-{random.randint(10000, 99999)}"
+        generated_codes["monthly"].append(m_code)
+        generated_codes["yearly"].append(y_code)
+        await query.message.edit_text(f"🎟 **الأكواد المולدة بنجاح:**\n\n⭐️ شهري: `{m_code}`\n💎 سنوي: `{y_code}`", parse_mode="Markdown")
 
     elif data == "admin_broadcast":
         context.user_data['broadcasting'] = True
-        await query.message.edit_text("📢 أرسل نص الإعلان الآن لبثه لجميع الطلاب المشتركين:")
-
-    elif data == "admin_gen_code":
-        m_code = f"ULTRA-M-{random.randint(1000, 9999)}"
-        y_code = f"ULTRA-Y-{random.randint(10000, 99999)}"
-        generated_codes["monthly"].append(m_code)
-        generated_codes["yearly"].append(y_code)
-        await query.message.edit_text(f"🎟 **الأكواد الخارقة المולدة:**\n\n⭐️ شهري: `{m_code}`\n💎 سنوي: `{y_code}`", parse_mode="Markdown")
+        await query.message.edit_text("📢 أرسل نص الإعلان الآن لبثه لجميع الطلاب:")
 
     elif data == "admin_show_logs":
         logs = "\n".join([f"• {d['name']} | {d['province']} | {d['school']}" for d in attendance_db.values()])
         if not logs:
-            logs = "لا توجد سجلات طلاب."
-        await query.message.edit_text(f"📋 **سجل الحضور والطلاب الأبطال:**\n\n{logs}")
+            logs = "لا توجد سجلات."
+        await query.message.edit_text(f"📋 **سجل الحضور والطلاب:**\n\n{logs}")
 
 def main():
     if not TOKEN or TOKEN == "ضع_التوكن_هنا_بين_العلامتين":
@@ -389,7 +342,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    print("المنصة التعليمية العراقية الخارقة تعمل بكفاءة تامة...")
+    print("نظام المنصة التعليمية مع لوحة تحكم CMS داخلية يعمل بكفاءة تامة...")
     app.run_polling()
 
 if __name__ == "__main__":
