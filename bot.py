@@ -7,8 +7,9 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-TOKEN = os.getenv("6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s")
-ADMIN_ID = os.getenv("1792685788")
+# ضع توكن بوتك الحقيقي هنا مباشرة بين علامتي التنصيص لضمان اشتغاله فوراً
+TOKEN = "6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s"
+ADMIN_ID = "1792685788"
 
 attendance_db = {}
 exams_keys = {}
@@ -19,7 +20,6 @@ stages_content = {
     "secondary": {"name": "📖 المرحلة الإعدادية", "notes": "📚 ملازم المرحلة الإعدادية الشاملة"}
 }
 
-# سيرفر ويب للحفاظ على عمل البوت على Render
 app_flask = Flask('')
 
 @app_flask.route('/')
@@ -29,11 +29,9 @@ def home():
 def run_flask():
     app_flask.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
-# أمر الفحص السريع للتأكد أن البوت يعمل
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏓 **البوت شغال وبأفضل حال! ✅**\nالمنصة التعليمية تعمل ومستعدة لاستقبال الأوامر.")
 
-# أمر البدء والتسجيل الإجباري
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in attendance_db:
@@ -191,16 +189,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(f"📋 **سجل الحضور:**\n\n{logs}", reply_markup=InlineKeyboardMarkup(keyboard))
 
 def main():
-    if not TOKEN:
-        print("خطأ: يرجى ضبط متغير البيئة BOT_TOKEN!")
+    if not TOKEN or TOKEN == "ضع_التوكن_هنا_بين_العلامتين":
+        print("خطأ: يرجى وضع التوكن الحقيقي داخل الكود!")
         return
 
     Thread(target=run_flask).start()
 
     app = ApplicationBuilder().token(TOKEN).build()
     
-    # إضافة معالجات الأوامر والرسائل
-    app.add_handler(CommandHandler("ping", ping_command))  # أمر الفحص السريع
+    app.add_handler(CommandHandler("ping", ping_command))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
