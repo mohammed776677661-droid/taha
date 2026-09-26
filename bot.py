@@ -216,7 +216,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not TOKEN:
-        print("خطأ: يرجى ضبط متغير البيئة 6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s!")
+        print("خطأ: يرجى ضبط متغير البيئة BOT_TOKEN!")
         return
 
     app = ApplicationBuilder().token(TOKEN).build()
