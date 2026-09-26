@@ -10,49 +10,75 @@ logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 # ضع توكن بوتك الحقيقي هنا مباشرة بين علامتي التنصيص
 TOKEN = "6697835631:AAE-isBrECs3BY3zUgKfifqoPM6nu6NBe6s"
-ADMIN_ID = "1792685788" # ضع آيدي حسابك هنا حصراً للتحكم الكامل
+ADMIN_ID = "1792685788"
 
-# قواعد البيانات الديناميكية
 attendance_db = {}
 exams_keys = {}
-active_subscriptions = {} # تخزين اشتراكات الطلاب والأكواد المفعلة
-generated_codes = {"monthly": [], "yearly": []} # تخزين الأكواد المتاحة
+active_subscriptions = {}
+generated_codes = {"monthly": [], "yearly": []}
 
-# الأقسام والملازم الافتراضية (قابلة للتوسعة)
 stages_content = {
     "primary": {
         "name": "📖 المرحلة الابتدائية",
-        "notes": ["📚 ملزمة الرياضيات - السادس الابتدائي", "📚 ملزمة الإنجليزية الشاملة", "📚 ملزمة العلوم والاجتماعيات"]
+        "notes": ["📚 ملزمة الرياضيات - السادس الابتدائي الشاملة", "📚 ملزمة قواعد اللغة العربية والإنكليزية"]
     },
     "intermediate": {
         "name": "📖 المرحلة المتوسطة",
-        "notes": ["📚 ملزمة الفيزياء - الثالث المتوسط", "📚 ملزمة الكيمياء والأحياء", "📚 ملزمة الرياضيات الحديثة"]
+        "notes": ["📚 ملزمة الفيزياء والكيمياء - الثالث المتوسط", "📚 ملزمة الاجتماعيات والرياضيات"]
     },
     "secondary": {
         "name": "📖 المرحلة الإعدادية",
-        "notes": ["📚 ملزمة الأحياء - السادس العلمي", "📚 ملزمة الفيزياء المنهج الكامل", "📚 ملزمة الأدب والقواعد للرابع والخامس والسادس"]
+        "notes": ["📚 ملزمة الأحياء المنهج الكامل - السادس العلمي", "📚 ملزمة الفيزياء والرياضيات التطبيقية والأحيائية"]
     }
 }
+
+# 🧠 بنك الأسئلة غير المحدود (يمكنك إضافة مئات الأسئلة هنا بكل سهولة)
+science_questions_bank = [
+    {
+        "q": "🧠 ما هو بيت الطاقة الرئيسي داخل الخلية الحية؟",
+        "options": [("✅ الميتوكوندريا", True), ("❌ الرايبوسوم", False), ("❌ نواة الخلية", False), ("❌ فجوة الخلية", False)]
+    },
+    {
+        "q": "⚗️ ما هي وحدة قياس التيار الكهربائي في النظام الدولي؟",
+        "options": [("❌ الفولت", False), ("✅ الأمبير", True), ("❌ الأوم", False), ("❌ الواط", False)]
+    },
+    {
+        "q": "🔢 ما هو الناتج الصحيح لجذر العدد 144؟",
+        "options": [("❌ 10", False), ("✅ 12", True), ("❌ 14", False), ("❌ 16", False)]
+    },
+    {
+        "q": "🧬 المسؤول عن نقل الصفات الوراثية داخل الخلية هو:",
+        "options": [("✅ حمض DNA", True), ("❌ البروتينات", False), ("❌ السكريات", False), ("❌ الدهون", False)]
+    },
+    {
+        "q": "⚗️ ما هو العنصر الكيميائي الذي يرمز له بالرمز (Au)؟",
+        "options": [("❌ الفضة", False), ("❌ الفضة", False), ("✅ الذهب", True), ("❌ الحديد", False)]
+    },
+    {
+        "q": "📐 مجموع قياسات زوايا المثلث الداخلية يساوي:",
+        "options": [("❌ 90 درجة", False), ("✅ 180 درجة", True), ("❌ 360 درجة", False), ("❌ 270 درجة", False)]
+    }
+]
 
 app_flask = Flask('')
 
 @app_flask.route('/')
 def home():
-    return "Educational Platform Bot is running successfully!"
+    return "Educational Platform Bot is running perfectly!"
 
 def run_flask():
     app_flask.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
 async def ping_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏓 **البوت يعمل بكفاءة تامة وبأفضل حال! ✅**")
+    await update.message.reply_text("🏓 **المنصة التعليمية تعمل بكفاءة تامة وبأفضل حال! ✅**")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in attendance_db:
         context.user_data['reg_step'] = 'name'
         await update.message.reply_text(
-            "🌟 **أهلاً بك في المنصة التعليمية الذكية الشاملة**\n\n"
-            "🛑 التسجيل إجباري للمتابعة واستخدام أقسام البوت.\n"
+            "🌟 **أهلاً بك في المنصة التعليمية العراقية الذكية**\n\n"
+            "🛑 التسجيل إجباري للمتابعة واستخدام خدمات المنصة والملازم.\n"
             "يرجى إرسال **اسمك الثلاثي** الآن:"
         )
         return
@@ -80,13 +106,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "school": text
         }
         context.user_data['reg_step'] = None
-        await update.message.reply_text("✅ **تم تسجيل حضورك وبياناتك بنجاح في سجلات المنصة!**")
+        await update.message.reply_text("✅ **تم تسجيل حضورك وبياناتك بنجاح في سجلات المنصة الرسمية!**")
         await show_main_menu_message(update, context)
         return
 
-    # وظائف لوحة المشرف والمطور
     if ADMIN_ID and str(user_id) == str(ADMIN_ID):
-        # إضافة ملزمة جديدة لقسم معين
         if context.user_data.get('adding_note_stage'):
             stage = context.user_data.get('adding_note_stage')
             stages_content[stage]["notes"].append(f"📚 {text.strip()}")
@@ -94,7 +118,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ تم إضافة الملزمة الجديدة بنجاح إلى قسم {stages_content[stage]['name']}!")
             return
 
-        # إرسال إعلان عام للطلاب
         if context.user_data.get('broadcasting'):
             context.user_data['broadcasting'] = False
             count = 0
@@ -104,18 +127,16 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     count += 1
                 except:
                     pass
-            await update.message.reply_text(f"✅ تم إرسال الإعلان بنجاح إلى {count} طالب!")
+            await update.message.reply_text(f"✅ تم إرسال الإعلان بنجاح إلى {count} طالب مشترك!")
             return
 
-        # تفعيل كود اشتراك أدخله المطور
         if context.user_data.get('waiting_for_key'):
             stage = context.user_data.get('target_stage', 'secondary')
             exams_keys[stage] = text.strip()
             context.user_data['waiting_for_key'] = False
-            await update.message.reply_text(f"✅ تم حفظ الإجابة النموذجية لامتحان التصحيح الذكي بنجاح!")
+            await update.message.reply_text(f"✅ تم حفظ الإجابة النموذجية بنجاح!")
             return
 
-    # نظام إدخال الكودات للطلاب
     if context.user_data.get('entering_sub_code'):
         context.user_data['entering_sub_code'] = False
         code = text.strip()
@@ -132,7 +153,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_main_menu_message(update, context)
         return
 
-    # تقييم التصحيح الذكي بالذكاء الاصطناعي
     if ADMIN_ID and str(user_id) == str(ADMIN_ID) and context.user_data.get('evaluating_stage'):
         stage = context.user_data.get('evaluating_stage')
         teacher_key = exams_keys.get(stage, "غير متوفرة")
@@ -160,29 +180,29 @@ async def show_main_menu_message(update: Update, context: ContextTypes.DEFAULT_T
     keyboard = [
         [InlineKeyboardButton("📚 قسم الملازم والمحاضرات", callback_data="menu_notes")],
         [InlineKeyboardButton("📝 قسم الامتحانات والتصحيح الذكي", callback_data="menu_exams")],
-        [InlineKeyboardButton("🎮 قسم الألعاب العلمية التفاعلية", callback_data="menu_games")],
+        [InlineKeyboardButton("🎮 قسم الألعاب والتحديات العلمية الذكية", callback_data="menu_games")],
         [InlineKeyboardButton("💎 تفعيل كود الاشتراك (شهري/سنوي)", callback_data="menu_activate_code")],
-        [InlineKeyboardButton("👤 بيانات الحضور وحسابي", callback_data="menu_profile")]
+        [InlineKeyboardButton("👤 ملفي الشخصي وبيانات الحضور", callback_data="menu_profile")]
     ]
     user_id = update.effective_user.id
     if ADMIN_ID and str(user_id) == str(ADMIN_ID):
-        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المطور والمشرف الرئيسية", callback_data="admin_panel")])
+        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المطور الرئيسية", callback_data="admin_panel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("🎓 **القائمة الرئيسية - منصة الملازم التعليمية الاحترافية:**", reply_markup=reply_markup, parse_mode="Markdown")
+    await update.message.reply_text("🎓 **الرئيسية - المنصة التعليمية العراقية الشاملة:**", reply_markup=reply_markup, parse_mode="Markdown")
 
 async def show_main_menu_callback(query, context):
     keyboard = [
         [InlineKeyboardButton("📚 قسم الملازم والمحاضرات", callback_data="menu_notes")],
         [InlineKeyboardButton("📝 قسم الامتحانات والتصحيح الذكي", callback_data="menu_exams")],
-        [InlineKeyboardButton("🎮 قسم الألعاب العلمية التفاعلية", callback_data="menu_games")],
+        [InlineKeyboardButton("🎮 قسم الألعاب والتحديات العلمية الذكية", callback_data="menu_games")],
         [InlineKeyboardButton("💎 تفعيل كود الاشتراك (شهري/سنوي)", callback_data="menu_activate_code")],
-        [InlineKeyboardButton("👤 بيانات الحضور وحسابي", callback_data="menu_profile")]
+        [InlineKeyboardButton("👤 ملفي الشخصي وبيانات الحضور", callback_data="menu_profile")]
     ]
     user_id = query.from_user.id
     if ADMIN_ID and str(user_id) == str(ADMIN_ID):
-        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المطور والمشرف الرئيسية", callback_data="admin_panel")])
+        keyboard.append([InlineKeyboardButton("⚙️ لوحة تحكم المطور الرئيسية", callback_data="admin_panel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.message.edit_text("🎓 **القائمة الرئيسية - منصة الملازم التعليمية الاحترافية:**", reply_markup=reply_markup, parse_mode="Markdown")
+    await query.message.edit_text("🎓 **الرئيسية - المنصة التعليمية العراقية الشاملة:**", reply_markup=reply_markup, parse_mode="Markdown")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -193,7 +213,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "main_menu":
         await show_main_menu_callback(query, context)
         
-    # قسم الملازم
     elif data == "menu_notes":
         keyboard = [
             [InlineKeyboardButton("📖 المرحلة الابتدائية", callback_data="note_primary")],
@@ -201,7 +220,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📖 المرحلة الإعدادية", callback_data="note_secondary")],
             [InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]
         ]
-        await query.message.edit_text("📚 **اختر المرحلة لاستعراض الملازم المتوفرة:**", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text("📚 **اختر المرحلة الدراسية لاستعراض الملازم:**", reply_markup=InlineKeyboardMarkup(keyboard))
         
     elif data in ["note_primary", "note_intermediate", "note_secondary"]:
         stage_key = data.replace("note_", "")
@@ -210,7 +229,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("🔙 رجوع للأقسام", callback_data="menu_notes")]
         ]
-        # إضافة زر إضافة ملزمة للمشرف داخل القسم مباشرة
         if ADMIN_ID and str(user_id) == str(ADMIN_ID):
             keyboard.insert(0, [InlineKeyboardButton("➕ إضافة ملزمة جديدة لهذا القسم", callback_data=f"add_note_{stage_key}")])
             
@@ -220,9 +238,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stage_key = data.replace("add_note_", "")
         context.user_data['adding_note_stage'] = stage_key
         keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="menu_notes")]]
-        await query.message.edit_text("✍️ أرسل الآن اسم ووصف الملزمة الجديدة ليتم إضافتها فوراً للقائمة:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text("✍️ أرسل الآن عنوان أو رابط الملزمة الجديدة لإضافتها فوراً للقائمة:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # قسم الامتحانات
     elif data == "menu_exams":
         keyboard = [
             [InlineKeyboardButton("📝 امتحان الابتدائية", callback_data="exam_primary")],
@@ -238,66 +255,70 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="menu_exams")]]
         await query.message.edit_text("📝 **اختبار التصحيح الذكي (AI)**\n\nأرسل الآن إجابتك النصية ليقوم النظام بتقييمها:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # قسم الألعاب العلمية التفاعلية
+    # 🎮 قسم الألعاب والأسئلة غير المحدودة الجديد
     elif data == "menu_games":
         keyboard = [
-            [InlineKeyboardButton("🧬 مسابقة الأحياء والعلوم", callback_data="game_bio")],
-            [InlineKeyboardButton("⚗️ مسابقة الفيزياء والكيمياء", callback_data="game_phys")],
-            [InlineKeyboardButton("🔢 تحدي الرياضيات والذكاء", callback_data="game_math")],
-            [InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]
+            [InlineKeyboardButton("🚀 ابدأ تحدي الأسئلة العشوائية الذكية", callback_data="play_next_question")],
+            [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
         ]
-        await query.message.edit_text("🎮 **قسم الألعاب والتحديات العلمية:**\nاختر التحدي لاختبار معلوماتك:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text(
+            "🎮 **قسم التحديات والمسابقات العلمية الذكية:**\n\n"
+            "اختبر معلوماتك في كافة المواد العلمية (أحياء، فيزياء، رياضيات، كيمياء).\n"
+            "الأسئلة تتجدد عشوائياً بلا حدود لكل تحدٍ جديد! هل أنت مستعد؟",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
-    elif data == "game_bio":
-        q_text = "🧠 **سؤال تحدي الأحياء:**\nما هو البيت الطاقة الرئيسي داخل الخلية الحية؟\n\n1️⃣ الميتوكوندريا\n2️⃣ الرايبوسوم\n3️⃣ نواة الخلية"
-        keyboard = [[InlineKeyboardButton("✅ 1️⃣ الميتوكوندريا", callback_data="game_correct"), InlineKeyboardButton("❌ 2️⃣ أو 3️⃣", callback_data="game_wrong")],
-                    [InlineKeyboardButton("🔙 رجوع للألعاب", callback_data="menu_games")]]
-        await query.message.edit_text(q_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    elif data == "play_next_question":
+        # اختيار سؤال عشوائي من البنك
+        q_item = random.choice(science_questions_bank)
+        options = q_item["options"]
+        random.shuffle(options) # خلط الخيارات لزيادة الحماس
+        
+        keyboard = []
+        for opt_text, is_correct in options:
+            cb_data = "game_win" if is_correct else "game_loss"
+            keyboard.append([InlineKeyboardButton(opt_text, callback_data=cb_data)])
+        
+        keyboard.append([InlineKeyboardButton("⏭ سؤال عشوائي آخر", callback_data="play_next_question")])
+        keyboard.append([InlineKeyboardButton("🔙 رجوع للقائمة", callback_data="menu_games")])
+        
+        await query.message.edit_text(f"🎯 **تحدي الذكاء العلمي:**\n\n{q_item['q']}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    elif data == "game_phys":
-        q_text = "⚗️ **سؤال تحدي الفيزياء:**\nما هي وحدة قياس التيار الكهربائي في النظام الدولي؟\n\n1️⃣ الفولت\n2️⃣ الأمبير\n3️⃣ الأوم"
-        keyboard = [[InlineKeyboardButton("❌ 1️⃣ أو 3️⃣", callback_data="game_wrong"), InlineKeyboardButton("✅ 2️⃣ الأمبير", callback_data="game_correct")],
-                    [InlineKeyboardButton("🔙 رجوع للألعاب", callback_data="menu_games")]]
-        await query.message.edit_text(q_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    elif data == "game_win":
+        keyboard = [
+            [InlineKeyboardButton("🏆 العب سؤالاً جديداً", callback_data="play_next_question")],
+            [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]
+        ]
+        await query.message.edit_text("🌟 **كفو! إجابة صحيحة 100% 👏**\nاستمر في تألقك العلمي واختبر نفسك بسؤال جديد.", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif data == "game_math":
-        q_text = "🔢 **سؤال تحدي الرياضيات:**\nما هو جذر العدد 144؟\n\n1️⃣ 10\n2️⃣ 12\n3️⃣ 14"
-        keyboard = [[InlineKeyboardButton("✅ 2️⃣ 12", callback_data="game_correct"), InlineKeyboardButton("❌ غير ذلك", callback_data="game_wrong")],
-                    [InlineKeyboardButton("🔙 رجوع للألعاب", callback_data="menu_games")]]
-        await query.message.edit_text(q_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    elif data == "game_loss":
+        keyboard = [
+            [InlineKeyboardButton("🔄 حاول مرة أخرى (سؤال جديد)", callback_data="play_next_question")],
+            [InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]
+        ]
+        await query.message.edit_text("❌ **عفواً، إجابة غير صحيحة!**\nلا تقلق، يمكنك المحاولة مرة أخرى بسؤال جديد وتطوير معلوماتك.", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    elif data == "game_correct":
-        keyboard = [[InlineKeyboardButton("🎮 لعب مرة أخرى", callback_data="menu_games"), InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]]
-        await query.message.edit_text("🏆 **إجابة صحيحة بطل! استمر في تألقك العلمي 🌟**", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    elif data == "game_wrong":
-        keyboard = [[InlineKeyboardButton("🔄 حاول مرة أخرى", callback_data="menu_games"), InlineKeyboardButton("🔙 القائمة الرئيسية", callback_data="main_menu")]]
-        await query.message.edit_text("❌ **إجابة خاطئة، حاول في السؤال القادم! 💪**", reply_markup=InlineKeyboardMarkup(keyboard))
-
-    # تفعيل الكودات
     elif data == "menu_activate_code":
         context.user_data['entering_sub_code'] = True
         keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="main_menu")]]
-        await query.message.edit_text("💎 **تفعيل الاشتراك المدفوع**\n\nأرسل الآن كود الاشتراك (الشهري أو السنوي) المكون من أرقام لتفعيله فوراً:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text("💎 **تفعيل الاشتراك المدفوع**\n\nأرسل الآن كود الاشتراك لتفعيله فوراً:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    # ملف المستخدم
     elif data == "menu_profile":
         info = attendance_db.get(user_id, {"name": "غير مسجل", "province": "-", "school": "-"})
         sub_status = active_subscriptions.get(user_id, "حساب مجاني عادي 👤")
-        text = f"👤 **معلومات حسابك الشخصي:**\n\n▫️ الاسم: `{info['name']}`\n▫️ المحافظة: `{info['province']}`\n▫️ المدرسة: `{info['school']}`\n▫️ حالة الاشتراك: **{sub_status}**"
+        text = f"👤 **بيانات حسابك الشخصي:**\n\n▫️ الاسم: `{info['name']}`\n▫️ المحافظة: `{info['province']}`\n▫️ المدرسة: `{info['school']}`\n▫️ حالة الاشتراك: **{sub_status}**"
         keyboard = [[InlineKeyboardButton("🔙 رجوع", callback_data="main_menu")]]
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
-    # لوحة تحكم المطور والمشرف الرئيسية
     elif data == "admin_panel":
         if ADMIN_ID and str(user_id) == str(ADMIN_ID):
             total_students = len(attendance_db)
-            text = f"⚙️ **لوحة التحكم الرئيسية للمطور:**\n\n👥 عدد الطلاب المسجلين: `{total_students}` طالب\n\nاختر الإجراء المطلوب:"
+            text = f"⚙️ **لوحة التحكم الرئيسية للمطور والمشرف:**\n\n👥 إجمالي الطلاب المسجلين: `{total_students}` طالب"
             keyboard = [
-                [InlineKeyboardButton("📢 إرسال إعلان عام للجميع", callback_data="admin_broadcast")],
-                [InlineKeyboardButton("🎟 توليد كود اشتراك شهري/سنوي", callback_data="admin_gen_code")],
+                [InlineKeyboardButton("📢 إرسال إعلان عام لكافة الطلاب", callback_data="admin_broadcast")],
+                [InlineKeyboardButton("🎟 توليد كود اشتراك شهري/سنوي جديد", callback_data="admin_gen_code")],
                 [InlineKeyboardButton("➕ إضافة إجابة نموذجية للامتحان", callback_data="admin_set_key")],
-                [InlineKeyboardButton("📋 عرض كشوفات الطلاب المسجلين", callback_data="admin_show_logs")],
+                [InlineKeyboardButton("📋 عرض سجلات وكشوفات الطلاب", callback_data="admin_show_logs")],
                 [InlineKeyboardButton("🔙 رجوع للقائمة الرئيسية", callback_data="main_menu")]
             ]
             await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
@@ -307,14 +328,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_broadcast":
         context.user_data['broadcasting'] = True
         keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="admin_panel")]]
-        await query.message.edit_text("📢 **نظام الإعلانات:**\n\nأرسل نص الإعلان الآن ليتم بثه لكافة الطلاب المسجلين في البوت:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text("📢 **نظام الإعلانات المركزي:**\n\nأرسل نص الإعلان الآن ليتم بثه وتوجيه لجميع الطلاب:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "admin_gen_code":
-        m_code = f"MONTH-{random.randint(1000, 9999)}"
-        y_code = f"YEAR-{random.randint(10000, 99999)}"
+        m_code = f"IQ-MONTH-{random.randint(1000, 9999)}"
+        y_code = f"IQ-YEAR-{random.randint(10000, 99999)}"
         generated_codes["monthly"].append(m_code)
         generated_codes["yearly"].append(y_code)
-        text = f"🎟 **تم توليد الأكواد الجديدة بنجاح:**\n\n⭐️ كود شهري: `{m_code}`\n💎 كود سنوي: `{y_code}`\n\nشارك الكود مع الطالب ليقوم بإدخاله عبر زر تفعيل الأكواد."
+        text = f"🎟 **تم توليد الأكواد بنجاح:**\n\n⭐️ كود شهري: `{m_code}`\n💎 كود سنوي: `{y_code}`"
         keyboard = [[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]]
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
@@ -322,10 +343,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['target_stage'] = 'secondary'
         context.user_data['waiting_for_key'] = True
         keyboard = [[InlineKeyboardButton("❌ إلغاء", callback_data="admin_panel")]]
-        await query.message.edit_text("✍️ أرسل الإجابة النموذجية المعتمدة لاختبار المرحلة الإعدادية:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text("✍️ أرسل الإجابة النموذجية المعتمدة للامتحان:", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif data == "admin_show_logs":
-        logs = "\n".join([f"• {d['name']} ({d['province']} - {d['school']})" for d in attendance_db.values()])
+        logs = "\n".join([f"• {d['name']} | {d['province']} | {d['school']}" for d in attendance_db.values()])
         if not logs:
             logs = "لا يوجد طلاب مسجلين حتى الآن."
         keyboard = [[InlineKeyboardButton("🔙 رجوع لوحة التحكم", callback_data="admin_panel")]]
@@ -345,7 +366,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
-    print("المنصة التعليمية الاحترافية تعمل بكفاءة تامة...")
+    print("المنصة التعليمية العراقية الشاملة تعمل بكفاءة تامة...")
     app.run_polling()
 
 if __name__ == "__main__":
