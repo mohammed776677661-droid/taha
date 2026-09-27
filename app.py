@@ -25,7 +25,8 @@ from docx import Document
 from pptx import Presentation
 from openpyxl import load_workbook
 import fitz
-from openai import OpenAI
+from google import genai
+from google.genai import types
 
 
 # ============================================================
@@ -37,15 +38,15 @@ app.secret_key = os.getenv("SECRET_KEY", "change-this-secret-key-in-render")
 
 DATABASE = os.getenv("DATABASE_PATH", "platform.db")
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
-AI_MODEL = os.getenv("AI_MODEL", "gpt-5.6-luna")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 
 MAX_FILE_SIZE_MB = 20
 app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 # ============================================================
@@ -222,21 +223,48 @@ def extract_json(text):
     return json.loads(match.group(0) if match else text)
 
 
+def _gemini_response_text(response):
+    text = getattr(response, "text", None)
+    if text:
+        return text
+    parts = getattr(response, "parts", None) or []
+    collected = []
+    for part in parts:
+        part_text = getattr(part, "text", None)
+        if part_text:
+            collected.append(part_text)
+    if collected:
+        return "\n".join(collected)
+    raise RuntimeError("لم يتم إرجاع نص من Gemini API.")
+
+
 def ai_text(prompt):
     if not client:
-        raise RuntimeError("OPENAI_API_KEY is not configured.")
+        raise RuntimeError("GEMINI_API_KEY is not configured in Render.")
 
-    response = client.responses.create(
-        model=AI_MODEL,
-        input=prompt
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt
     )
-    return response.output_text
+    return _gemini_response_text(response)
+
+
+def ai_file(file_path, prompt, mime_type):
+    if not client:
+        raise RuntimeError("GEMINI_API_KEY is not configured in Render.")
+
+    with open(file_path, "rb") as source_file:
+        data = source_file.read()
+
+    part = types.Part.from_bytes(data=data, mime_type=mime_type)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[prompt, part]
+    )
+    return _gemini_response_text(response)
 
 
 def ai_image(image_path, prompt):
-    if not client:
-        raise RuntimeError("OPENAI_API_KEY is not configured.")
-
     extension = os.path.splitext(image_path)[1].lower()
     mime = {
         ".png": "image/png",
@@ -244,23 +272,7 @@ def ai_image(image_path, prompt):
         ".jpeg": "image/jpeg",
         ".webp": "image/webp"
     }.get(extension, "image/jpeg")
-
-    with open(image_path, "rb") as image_file:
-        encoded = base64.b64encode(image_file.read()).decode("utf-8")
-
-    image_url = f"data:{mime};base64,{encoded}"
-
-    response = client.responses.create(
-        model=AI_MODEL,
-        input=[{
-            "role": "user",
-            "content": [
-                {"type": "input_text", "text": prompt},
-                {"type": "input_image", "image_url": image_url}
-            ]
-        }]
-    )
-    return response.output_text
+    return ai_file(image_path, prompt, mime)
 
 
 def process_uploaded_file(uploaded_file, prompt):
@@ -287,40 +299,19 @@ def process_uploaded_file(uploaded_file, prompt):
 
     # Office/text files are extracted on the server and then analyzed by AI.
     if extension == ".pdf":
-        extracted = extract_pdf_text(file_path)
-        if extracted.strip() and not extracted.startswith("PDF extraction error:"):
-            return ai_text(prompt + "\n\nSOURCE MATERIAL:\n" + extracted)
-
-        # Scanned/image-only PDFs: render pages and send them to the vision model.
-        pdf = fitz.open(file_path)
-        page_results = []
-        page_count = len(pdf)
-        max_pages = min(page_count, 20)
+        # Gemini can understand PDF text, scanned pages, tables and diagrams directly.
         try:
-            for page_index in range(max_pages):
-                page = pdf.load_page(page_index)
-                pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-                image_path = os.path.join(
-                    UPLOAD_FOLDER,
-                    f"pdf_page_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{page_index}.png"
+            return ai_file(file_path, prompt, "application/pdf")
+        except Exception as gemini_pdf_error:
+            extracted = extract_pdf_text(file_path)
+            if extracted.strip() and not extracted.startswith("PDF extraction error:"):
+                return ai_text(
+                    prompt
+                    + "\n\nSOURCE MATERIAL:\n"
+                    + extracted
+                    + "\n\nNOTE: The original PDF could not be sent directly, so use the extracted text above."
                 )
-                pix.save(image_path)
-                try:
-                    page_prompt = prompt + f"\n\nهذه الصفحة رقم {page_index + 1} من ملف PDF مصوّر. اقرأ النص الظاهر فيها بدقة ثم نفّذ المطلوب."
-                    page_results.append(ai_image(image_path, page_prompt))
-                finally:
-                    try:
-                        os.remove(image_path)
-                    except OSError:
-                        pass
-        finally:
-            pdf.close()
-
-        if not page_results:
-            raise ValueError("تعذر قراءة صفحات الـPDF المصوّر.")
-
-        notice = "\n\n[تمت معالجة أول 20 صفحة من PDF المصوّر]\n" if page_count > 20 else "\n\n"
-        return notice.join(page_results)
+            raise RuntimeError("تعذر إرسال ملف PDF إلى Gemini: " + str(gemini_pdf_error))
 
     if extension == ".docx":
         extracted = extract_docx_text(file_path)
