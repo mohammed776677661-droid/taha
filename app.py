@@ -1,1576 +1,3059 @@
 import os
-import json
-import base64
 import sqlite3
-import re
-import io
-from datetime import datetime
+import secrets
+from datetime import datetime, date
 from functools import wraps
 
 from flask import (
-    Flask,
-    request,
-    redirect,
-    url_for,
-    session,
-    flash,
-    render_template_string,
-    send_file,
-    send_from_directory,
+    Flask, request, redirect, url_for, session,
+    render_template_string, jsonify, send_from_directory,
+    flash
 )
-
 from werkzeug.utils import secure_filename
-from pypdf import PdfReader
-from docx import Document
-from pptx import Presentation
-from openpyxl import load_workbook
-import fitz
-from google import genai
-from google.genai import types
+
+try:
+    from google import genai
+    from google.genai import types
+except Exception:
+    genai = None
+    types = None
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
+# =========================================================
+# CONFIG
+# =========================================================
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "change-this-secret-key-in-render")
 
-DATABASE = os.getenv("DATABASE_PATH", "platform.db")
-UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.7-flash")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+app.secret_key = os.environ.get(
+    "SECRET_KEY",
+    "change-this-secret-key"
+)
 
-MAX_FILE_SIZE_MB = 20
-app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE_MB * 1024 * 1024
+DATABASE = os.environ.get(
+    "DATABASE_PATH",
+    "platform.db"
+)
+
+UPLOAD_FOLDER = os.environ.get(
+    "UPLOAD_FOLDER",
+    "uploads"
+)
+
+ADMIN_PASSWORD = os.environ.get(
+    "ADMIN_PASSWORD",
+    "123456"
+)
+
+GEMINI_API_KEY = os.environ.get(
+    "GEMINI_API_KEY",
+    ""
+)
+
+GEMINI_MODEL = os.environ.get(
+    "GEMINI_MODEL",
+    "gemini-3.7-flash"
+)
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
-
-# ============================================================
+# =========================================================
 # DATABASE
-# ============================================================
+# =========================================================
 
-def get_db():
-    connection = sqlite3.connect(DATABASE)
-    connection.row_factory = sqlite3.Row
-    return connection
+def db():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
-def init_database():
-    db = get_db()
+def init_db():
 
-    db.execute("""
+    conn = db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            id INTEGER PRIMARY KEY,
+            site_name TEXT DEFAULT 'منصة جامعة الأنبار التعليمية',
+            logo TEXT DEFAULT '',
+            primary_color TEXT DEFAULT '#2563eb',
+            secondary_color TEXT DEFAULT '#0f172a',
+            accent_color TEXT DEFAULT '#f59e0b',
+            welcome TEXT DEFAULT 'معاً نحو مستقبل جامعي أفضل',
+            notice TEXT DEFAULT 'أهلاً بكم في منصة جامعة الأنبار التعليمية'
+        )
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            full_name TEXT NOT NULL,
-            stage TEXT NOT NULL,
-            study_type TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            name TEXT NOT NULL,
+            college TEXT DEFAULT '',
+            department TEXT DEFAULT '',
+            stage TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            created_at TEXT
         )
     """)
 
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            site_name TEXT NOT NULL,
-            logo_url TEXT DEFAULT '',
-            primary_color TEXT DEFAULT '#0d6efd',
-            secondary_color TEXT DEFAULT '#07111f',
-            university_notice TEXT DEFAULT 'جامعة الأنبار'
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS attendance (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER,
+            attendance_date TEXT,
+            created_at TEXT
         )
     """)
 
-    db.execute("""
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS subjects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            icon TEXT DEFAULT 'fa-book',
+            color TEXT DEFAULT '#2563eb'
+        )
+    """)
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS lessons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject_id INTEGER,
+            title TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            video_url TEXT DEFAULT '',
+            file_url TEXT DEFAULT '',
+            lesson_number INTEGER DEFAULT 1,
+            created_at TEXT
+        )
+    """)
+
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS announcements (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
             content TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT
         )
     """)
 
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS generated_items (
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS exams (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER,
-            item_type TEXT NOT NULL,
             title TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            subject TEXT DEFAULT '',
+            duration INTEGER DEFAULT 30,
+            questions TEXT DEFAULT '',
+            answers TEXT DEFAULT '',
+            created_at TEXT
         )
     """)
 
-    existing = db.execute(
-        "SELECT id FROM settings WHERE id = 1"
-    ).fetchone()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_name TEXT,
+            exam_id INTEGER,
+            score INTEGER DEFAULT 0,
+            total INTEGER DEFAULT 0,
+            created_at TEXT
+        )
+    """)
 
-    if not existing:
-        db.execute("""
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ai_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_name TEXT,
+            tool TEXT,
+            input_text TEXT,
+            output_text TEXT,
+            created_at TEXT
+        )
+    """)
+
+    cur.execute(
+        "SELECT COUNT(*) AS c FROM settings"
+    )
+
+    if cur.fetchone()["c"] == 0:
+        cur.execute("""
             INSERT INTO settings
-            (id, site_name, logo_url, primary_color, secondary_color, university_notice)
-            VALUES
-            (1, 'منصة الأنبار التعليمية الذكية', '', '#0d6efd', '#07111f', 'جامعة الأنبار')
-        """)
+            (site_name, welcome, notice)
+            VALUES (?, ?, ?)
+        """, (
+            "منصة جامعة الأنبار التعليمية",
+            "معاً نحو مستقبل جامعي أفضل",
+            "أهلاً بكم في منصة جامعة الأنبار التعليمية"
+        ))
 
-    db.commit()
-    db.close()
+    cur.execute(
+        "SELECT COUNT(*) AS c FROM subjects"
+    )
+
+    if cur.fetchone()["c"] == 0:
+
+        subjects = [
+            ("الطب", "مواد ومحاضرات كلية الطب", "fa-heart-pulse"),
+            ("الهندسة", "محاضرات ومواد هندسية", "fa-gears"),
+            ("علوم الحاسوب", "البرمجة وتقنيات المعلومات", "fa-laptop-code"),
+            ("العلوم", "مواد العلوم الأساسية", "fa-flask"),
+            ("الآداب", "المواد الإنسانية والأدبية", "fa-book-open"),
+            ("التربية", "المناهج والمواد التربوية", "fa-school"),
+            ("القانون", "محاضرات ومواد القانون", "fa-scale-balanced"),
+            ("الإدارة والاقتصاد", "المواد الإدارية والاقتصادية", "fa-chart-line"),
+        ]
+
+        for item in subjects:
+            cur.execute("""
+                INSERT INTO subjects
+                (name, description, icon)
+                VALUES (?, ?, ?)
+            """, item)
+
+    conn.commit()
+    conn.close()
 
 
-init_database()
+init_db()
 
 
-# ============================================================
+# =========================================================
 # HELPERS
-# ============================================================
+# =========================================================
 
-def get_settings():
-    db = get_db()
-    settings = db.execute(
-        "SELECT * FROM settings WHERE id = 1"
+def settings():
+    conn = db()
+    row = conn.execute(
+        "SELECT * FROM settings LIMIT 1"
     ).fetchone()
-    db.close()
-    return settings
+    conn.close()
+    return row
 
 
-def login_required(function):
-    @wraps(function)
+def admin_required(func):
+
+    @wraps(func)
     def wrapper(*args, **kwargs):
-        if "student_id" not in session:
-            return redirect(url_for("attendance"))
-        return function(*args, **kwargs)
-    return wrapper
 
-
-def admin_required(function):
-    @wraps(function)
-    def wrapper(*args, **kwargs):
-        if not session.get("admin_logged_in"):
+        if not session.get("admin"):
             return redirect(url_for("admin_login"))
-        return function(*args, **kwargs)
+
+        return func(*args, **kwargs)
+
     return wrapper
 
 
-def allowed_file(filename):
-    extensions = {
-        "pdf", "png", "jpg", "jpeg", "webp",
-        "txt", "md", "csv", "docx", "pptx", "xlsx"
-    }
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in extensions
+def current_student():
+    return session.get("student_name", "")
 
 
-def extract_pdf_text(file_path):
+def gemini_client():
+
+    if not GEMINI_API_KEY or genai is None:
+        return None
+
     try:
-        reader = PdfReader(file_path)
-        pages = [(page.extract_text() or "") for page in reader.pages]
-        return "\n\n".join(pages)[:70000]
-    except Exception as error:
-        return f"PDF extraction error: {error}"
+        return genai.Client(
+            api_key=GEMINI_API_KEY
+        )
+    except Exception:
+        return None
 
 
-def extract_docx_text(file_path):
-    document = Document(file_path)
-    parts = []
-    for paragraph in document.paragraphs:
-        if paragraph.text.strip():
-            parts.append(paragraph.text.strip())
-    for table in document.tables:
-        for row in table.rows:
-            parts.append(" | ".join(cell.text.strip() for cell in row.cells))
-    return "\n".join(parts)[:70000]
+def ask_gemini(prompt):
 
+    client = gemini_client()
 
-def extract_pptx_text(file_path):
-    presentation = Presentation(file_path)
-    parts = []
-    for slide_number, slide in enumerate(presentation.slides, 1):
-        slide_parts = []
-        for shape in slide.shapes:
-            if hasattr(shape, "text") and shape.text.strip():
-                slide_parts.append(shape.text.strip())
-        if slide_parts:
-            parts.append(f"[Slide {slide_number}]\n" + "\n".join(slide_parts))
-    return "\n\n".join(parts)[:70000]
-
-
-def extract_xlsx_text(file_path):
-    workbook = load_workbook(file_path, read_only=True, data_only=True)
-    parts = []
-    for sheet in workbook.worksheets:
-        parts.append(f"[Sheet: {sheet.title}]")
-        for row in sheet.iter_rows(values_only=True):
-            values = ["" if value is None else str(value) for value in row]
-            if any(values):
-                parts.append(" | ".join(values))
-    workbook.close()
-    return "\n".join(parts)[:70000]
-
-
-def extract_text_file(file_path):
-    with open(file_path, "r", encoding="utf-8", errors="replace") as file:
-        return file.read()[:70000]
-
-
-def extract_json(text):
-    text = text.strip()
-    text = re.sub(r"^```json\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^```\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    return json.loads(match.group(0) if match else text)
-
-
-def _gemini_response_text(response):
-    text = getattr(response, "text", None)
-    if text:
-        return text
-    parts = getattr(response, "parts", None) or []
-    collected = []
-    for part in parts:
-        part_text = getattr(part, "text", None)
-        if part_text:
-            collected.append(part_text)
-    if collected:
-        return "\n".join(collected)
-    raise RuntimeError("لم يتم إرجاع نص من Gemini API.")
-
-
-def ai_text(prompt):
     if not client:
-        raise RuntimeError("GEMINI_API_KEY is not configured in Render.")
+        return "لم يتم تفعيل Gemini بعد. أضف GEMINI_API_KEY في إعدادات Render."
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=prompt
-    )
-    return _gemini_response_text(response)
+    try:
 
-
-def ai_file(file_path, prompt, mime_type):
-    if not client:
-        raise RuntimeError("GEMINI_API_KEY is not configured in Render.")
-
-    with open(file_path, "rb") as source_file:
-        data = source_file.read()
-
-    part = types.Part.from_bytes(data=data, mime_type=mime_type)
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[prompt, part]
-    )
-    return _gemini_response_text(response)
-
-
-def ai_image(image_path, prompt):
-    extension = os.path.splitext(image_path)[1].lower()
-    mime = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp"
-    }.get(extension, "image/jpeg")
-    return ai_file(image_path, prompt, mime)
-
-
-def process_uploaded_file(uploaded_file, prompt):
-    if not uploaded_file or not uploaded_file.filename:
-        raise ValueError("لم يتم اختيار ملف أو صورة.")
-
-    filename = secure_filename(uploaded_file.filename)
-    if not filename:
-        raise ValueError("اسم الملف غير صالح.")
-
-    if not allowed_file(filename):
-        raise ValueError(
-            "الملفات المدعومة: PDF, PNG, JPG, JPEG, WEBP, DOCX, PPTX, XLSX, TXT, MD, CSV."
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt
         )
 
-    saved_name = datetime.now().strftime("%Y%m%d%H%M%S%f") + "_" + filename
-    file_path = os.path.join(UPLOAD_FOLDER, saved_name)
-    uploaded_file.save(file_path)
-    extension = os.path.splitext(filename)[1].lower()
+        if hasattr(response, "text") and response.text:
+            return response.text
 
-    # Images are sent directly to the vision-capable AI model.
-    if extension in {".png", ".jpg", ".jpeg", ".webp"}:
-        return ai_image(file_path, prompt)
+        return "لم يتم الحصول على نتيجة."
 
-    # Office/text files are extracted on the server and then analyzed by AI.
-    if extension == ".pdf":
-        # Gemini can understand PDF text, scanned pages, tables and diagrams directly.
-        try:
-            return ai_file(file_path, prompt, "application/pdf")
-        except Exception as gemini_pdf_error:
-            extracted = extract_pdf_text(file_path)
-            if extracted.strip() and not extracted.startswith("PDF extraction error:"):
-                return ai_text(
-                    prompt
-                    + "\n\nSOURCE MATERIAL:\n"
-                    + extracted
-                    + "\n\nNOTE: The original PDF could not be sent directly, so use the extracted text above."
-                )
-            raise RuntimeError("تعذر إرسال ملف PDF إلى Gemini: " + str(gemini_pdf_error))
+    except Exception as e:
 
-    if extension == ".docx":
-        extracted = extract_docx_text(file_path)
-    elif extension == ".pptx":
-        extracted = extract_pptx_text(file_path)
-    elif extension == ".xlsx":
-        extracted = extract_xlsx_text(file_path)
-    else:
-        extracted = extract_text_file(file_path)
-
-    if not extracted.strip():
-        raise ValueError("الملف فارغ أو لم يتم العثور على نص قابل للقراءة.")
-
-    return ai_text(prompt + "\n\nSOURCE MATERIAL:\n" + extracted)
+        return f"حدث خطأ أثناء الاتصال بالذكاء الاصطناعي: {str(e)}"
 
 
-def save_generated_item(student_id, item_type, title, content):
-    db = get_db()
-    cursor = db.execute("""
-        INSERT INTO generated_items
-        (student_id, item_type, title, content, created_at)
+def save_ai_history(tool, input_text, output_text):
+
+    conn = db()
+
+    conn.execute("""
+        INSERT INTO ai_history
+        (student_name, tool, input_text, output_text, created_at)
         VALUES (?, ?, ?, ?, ?)
     """, (
-        student_id,
-        item_type,
-        title,
-        content,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        current_student(),
+        tool,
+        input_text,
+        output_text,
+        datetime.now().isoformat()
     ))
-    item_id = cursor.lastrowid
-    db.commit()
-    db.close()
-    return item_id
+
+    conn.commit()
+    conn.close()
 
 
-def bilingual_rules():
-    return """
-IMPORTANT BILINGUAL RULES:
-1. The student interface is Arabic.
-2. Do not leave important English words or technical terms without Arabic meaning.
-3. When an English term appears, keep the English term and immediately provide its Arabic meaning in parentheses.
-   Example: Cell (الخلية).
-4. For full English sentences, provide the Arabic translation directly below or after the English sentence.
-5. Preserve scientific terminology, formulas, numbers and units.
-6. Do not invent information.
-"""
+# =========================================================
+# BASE HTML
+# =========================================================
 
-
-def export_text(title, content):
-    text = f"{title}\n{'=' * 60}\n\n{content}"
-    return send_file(
-        io.BytesIO(text.encode("utf-8")),
-        mimetype="text/plain; charset=utf-8",
-        as_attachment=True,
-        download_name="anbar-ai-result.txt"
-    )
-
-
-# ============================================================
-# SHARED HTML
-# ============================================================
-
-UPLOAD_PROCESS_SCRIPT = """
-<script>
-document.querySelectorAll('form[enctype="multipart/form-data"]').forEach(function(form) {
-    form.addEventListener('submit', function() {
-        const button = form.querySelector('button[type="submit"]');
-        const input = form.querySelector('input[type="file"]');
-        if (input && !input.files.length) {
-            alert('اختر ملفاً أو صورة أولاً.');
-            return;
-        }
-        if (button) {
-            button.disabled = true;
-            button.innerHTML = '⏳ جاري رفع الملف وتحليله بالذكاء الاصطناعي...';
-        }
-        const status = document.createElement('div');
-        status.className = 'alert';
-        status.innerHTML = '🤖 تم استلام الملف. انتظر حتى يكتمل التحليل ثم ستظهر النتيجة هنا.';
-        form.parentNode.insertBefore(status, form.nextSibling);
-    });
-});
-</script>
-"""
-
-BASE_STYLE = """
-<style>
-:root {
-    --primary: {{ settings.primary_color }};
-    --secondary: {{ settings.secondary_color }};
-    --background: #f4f7fb;
-    --card: #ffffff;
-    --text: #152238;
-    --muted: #667085;
-    --border: #e5e7eb;
-}
-* { box-sizing: border-box; }
-body {
-    margin: 0;
-    font-family: Tahoma, Arial, sans-serif;
-    background: linear-gradient(135deg, #f8fbff, #eef4fb);
-    color: var(--text);
-    direction: rtl;
-}
-a { text-decoration: none; color: inherit; }
-.container { width: min(1150px, 94%); margin: auto; }
-.navbar {
-    background: var(--secondary);
-    color: white;
-    padding: 15px 0;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    box-shadow: 0 4px 20px rgba(0,0,0,.12);
-}
-.nav-inner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 15px;
-}
-.brand { display: flex; align-items: center; gap: 10px; font-weight: bold; }
-.brand img {
-    width: 42px; height: 42px; border-radius: 50%;
-    object-fit: cover; background: white;
-}
-.nav-links { display: flex; gap: 8px; flex-wrap: wrap; }
-.nav-links a { padding: 8px 12px; border-radius: 10px; font-size: 14px; }
-.nav-links a:hover { background: rgba(255,255,255,.12); }
-.page { padding: 30px 0 60px; }
-.hero {
-    background: linear-gradient(135deg, var(--secondary), #15365c);
-    color: white; border-radius: 25px; padding: 35px;
-    margin-bottom: 25px; box-shadow: 0 15px 40px rgba(0,0,0,.12);
-}
-.hero h1 { margin: 0 0 10px; font-size: clamp(25px, 5vw, 42px); }
-.hero p { opacity: .9; line-height: 1.9; }
-.grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 18px;
-}
-.card {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 20px; padding: 22px;
-    box-shadow: 0 8px 30px rgba(15,23,42,.06);
-}
-.feature-card { transition: .25s; }
-.feature-card:hover { transform: translateY(-5px); box-shadow: 0 15px 35px rgba(15,23,42,.12); }
-.icon {
-    width: 55px; height: 55px; border-radius: 16px;
-    display: grid; place-items: center; background: #edf5ff;
-    font-size: 25px; margin-bottom: 15px;
-}
-.btn {
-    display: inline-flex; align-items: center; justify-content: center;
-    border: 0; border-radius: 12px; padding: 12px 18px;
-    cursor: pointer; background: var(--primary); color: white;
-    font-weight: bold; margin: 6px 4px 0 0;
-}
-.btn:hover { opacity: .9; }
-.btn.secondary { background: #eef2f7; color: #1f2937; }
-.btn.dark { background: #172033; color: white; }
-.form-card { max-width: 700px; margin: 30px auto; }
-.form-group { margin-bottom: 18px; }
-label { display: block; margin-bottom: 7px; font-weight: bold; }
-input, select, textarea {
-    width: 100%; border: 1px solid #d8dee8; border-radius: 12px;
-    padding: 13px; font-size: 15px; outline: none; background: white;
-}
-input:focus, select:focus, textarea:focus {
-    border-color: var(--primary); box-shadow: 0 0 0 3px rgba(13,110,253,.08);
-}
-textarea { min-height: 180px; resize: vertical; }
-.upload-box {
-    border: 2px dashed #b8c4d6; padding: 30px; text-align: center;
-    border-radius: 18px; background: #fafcff; margin-bottom: 20px;
-}
-.result {
-    white-space: pre-wrap; line-height: 2; background: #fbfdff;
-    border: 1px solid #e4eaf2; border-radius: 16px;
-    padding: 20px; margin-top: 20px; direction: rtl;
-}
-.alert {
-    padding: 14px 17px; border-radius: 13px; margin-bottom: 18px;
-    background: #eef6ff; border: 1px solid #cfe3ff;
-}
-.alert.error { background: #fff1f2; border-color: #fecdd3; }
-.loading-screen {
-    position: fixed; inset: 0;
-    background: radial-gradient(circle at top, #17345b, #040a12);
-    z-index: 9999; display: flex; align-items: center;
-    justify-content: center; color: white;
-}
-.loading-content { text-align: center; width: 90%; max-width: 450px; }
-.loading-logo {
-    width: 100px; height: 100px; object-fit: cover; border-radius: 50%;
-    background: white; padding: 5px; margin-bottom: 20px;
-}
-.loader {
-    height: 7px; width: 100%; background: rgba(255,255,255,.15);
-    border-radius: 20px; overflow: hidden; margin-top: 25px;
-}
-.loader span {
-    display: block; height: 100%; width: 0; background: var(--primary);
-    animation: loading 5s linear forwards;
-}
-@keyframes loading { to { width: 100%; } }
-.stat { text-align: center; }
-.stat strong { display: block; font-size: 30px; color: var(--primary); }
-.admin-table { width: 100%; border-collapse: collapse; min-width: 760px; }
-.admin-table th, .admin-table td {
-    border-bottom: 1px solid #e5e7eb; padding: 12px; text-align: right;
-}
-.exam-question {
-    background: white; border: 1px solid var(--border);
-    border-radius: 18px; padding: 20px; margin-bottom: 15px;
-}
-.option {
-    display: block; margin: 8px 0; padding: 12px;
-    background: #f8fafc; border-radius: 10px; cursor: pointer;
-}
-.mind-map { display: flex; flex-direction: column; align-items: center; gap: 15px; }
-.mind-node {
-    padding: 15px 25px; background: white; border: 2px solid var(--primary);
-    border-radius: 15px; box-shadow: 0 5px 15px rgba(0,0,0,.08);
-    text-align: center; max-width: 95%;
-}
-.summary-card {
-    background: white; border-radius: 20px; padding: 25px;
-    border: 1px solid #e1e7ef; box-shadow: 0 10px 30px rgba(15,23,42,.08);
-}
-.notice {
-    padding: 12px 15px; border-radius: 12px;
-    background: #fff8e7; border: 1px solid #f4d58d; margin: 12px 0;
-}
-.footer {
-    background: var(--secondary); color: white; padding: 25px 0;
-    text-align: center; margin-top: 50px;
-}
-.kpi {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px; margin-bottom: 20px;
-}
-.kpi .card { padding: 18px; }
-.small { color: var(--muted); font-size: 13px; }
-@media(max-width:700px) {
-    .nav-inner { flex-direction: column; }
-    .nav-links { justify-content: center; }
-    .hero { padding: 25px; }
-}
-</style>
-"""
-
-
-def result_actions(item_id, element_id, title="نتيجة الذكاء الاصطناعي"):
-    if not item_id:
-        return ""
-    return f"""
-<div class="notice">
-    يمكنك حفظ النتيجة كملف أو صورة، أو مشاركتها من هاتفك.
-</div>
-<a class="btn secondary" href="{url_for('download_item', item_id=item_id)}">
-    📄 تحميل كملف
-</a>
-<button class="btn" type="button" onclick="downloadCard('{element_id}')">
-    🖼️ تحميل كصورة
-</button>
-<button class="btn dark" type="button" onclick="shareCard('{element_id}', {json.dumps(title, ensure_ascii=False)})">
-    📤 مشاركة
-</button>
-<script>
-async function downloadCard(id) {{
-    if (!window.html2canvas) {{
-        alert("انتظر تحميل مكتبة الصور ثم حاول مرة أخرى.");
-        return;
-    }}
-    const canvas = await html2canvas(document.getElementById(id), {{
-        backgroundColor: "#ffffff",
-        scale: 2
-    }});
-    const link = document.createElement("a");
-    link.download = "anbar-ai-result.png";
-    link.href = canvas.toDataURL("image/png");
-    link.click();
-}}
-async function shareCard(id, title) {{
-    const element = document.getElementById(id);
-    const text = element.innerText || "";
-    if (navigator.share) {{
-        try {{
-            await navigator.share({{title: title, text: text}});
-            return;
-        }} catch (e) {{}}
-    }}
-    try {{
-        await navigator.clipboard.writeText(text);
-        alert("تم نسخ النتيجة. يمكنك إرسالها للطالب.");
-    }} catch (e) {{
-        alert("يمكنك استخدام زر تحميل الصورة أو الملف.");
-    }}
-}}
-</script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-"""
-
-
-def render_page(title, body, **context):
-    settings = get_settings()
-
-    template = f"""
+BASE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
+
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title} | {{{{ settings.site_name }}}}</title>
-<meta name="description" content="منصة تعليمية ذكية لطلاب جامعة الأنبار">
-{BASE_STYLE}
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1.0">
+
+<meta name="theme-color"
+content="{{ settings.primary_color }}">
+
+<title>{{ title }} - {{ settings.site_name }}</title>
+
+<link rel="manifest"
+href="{{ url_for('manifest') }}">
+
+<link rel="stylesheet"
+href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css">
+
+<style>
+
+*{
+    box-sizing:border-box;
+    margin:0;
+    padding:0;
+}
+
+body{
+    font-family:
+    Tahoma,
+    Arial,
+    sans-serif;
+
+    background:#f1f5f9;
+    color:#172033;
+}
+
+a{
+    text-decoration:none;
+    color:inherit;
+}
+
+.container{
+    width:min(1100px,94%);
+    margin:auto;
+}
+
+.navbar{
+    background:{{ settings.secondary_color }};
+    color:white;
+    position:sticky;
+    top:0;
+    z-index:1000;
+    box-shadow:0 3px 15px rgba(0,0,0,.15);
+}
+
+.nav-inner{
+    min-height:68px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:15px;
+}
+
+.brand{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    font-weight:900;
+}
+
+.brand img{
+    width:42px;
+    height:42px;
+    object-fit:cover;
+    border-radius:12px;
+}
+
+.nav-links{
+    display:flex;
+    gap:7px;
+    flex-wrap:wrap;
+}
+
+.nav-links a{
+    padding:10px 13px;
+    border-radius:10px;
+    color:white;
+    font-size:14px;
+}
+
+.nav-links a:hover{
+    background:rgba(255,255,255,.12);
+}
+
+.hero{
+    margin:25px 0;
+    padding:35px 25px;
+    border-radius:25px;
+    color:white;
+    background:
+    linear-gradient(
+        135deg,
+        {{ settings.primary_color }},
+        {{ settings.secondary_color }}
+    );
+    box-shadow:0 15px 35px rgba(15,23,42,.15);
+}
+
+.hero h1{
+    font-size:32px;
+    margin-bottom:10px;
+}
+
+.hero p{
+    opacity:.9;
+    line-height:1.9;
+}
+
+.notice{
+    background:white;
+    border-right:5px solid {{ settings.accent_color }};
+    padding:17px;
+    border-radius:15px;
+    margin:20px 0;
+    box-shadow:0 5px 18px rgba(0,0,0,.06);
+}
+
+.grid{
+    display:grid;
+    grid-template-columns:
+    repeat(auto-fit,minmax(210px,1fr));
+    gap:17px;
+}
+
+.card{
+    background:white;
+    border-radius:20px;
+    padding:22px;
+    box-shadow:0 7px 22px rgba(0,0,0,.07);
+    transition:.2s;
+}
+
+.card:hover{
+    transform:translateY(-3px);
+}
+
+.card-icon{
+    width:52px;
+    height:52px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    border-radius:15px;
+    color:white;
+    background:{{ settings.primary_color }};
+    font-size:22px;
+    margin-bottom:15px;
+}
+
+.card h3{
+    margin-bottom:8px;
+}
+
+.card p{
+    color:#64748b;
+    line-height:1.8;
+    font-size:14px;
+}
+
+.btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    border:none;
+    cursor:pointer;
+    background:{{ settings.primary_color }};
+    color:white;
+    padding:12px 18px;
+    border-radius:12px;
+    margin-top:13px;
+    font-size:15px;
+}
+
+.btn:hover{
+    opacity:.9;
+}
+
+.btn-danger{
+    background:#dc2626;
+}
+
+.btn-green{
+    background:#16a34a;
+}
+
+.btn-dark{
+    background:#172033;
+}
+
+.input,
+textarea,
+select{
+    width:100%;
+    padding:13px;
+    border:1px solid #dbe3ef;
+    border-radius:12px;
+    outline:none;
+    margin-top:7px;
+    margin-bottom:15px;
+    background:white;
+    font-family:inherit;
+}
+
+textarea{
+    min-height:150px;
+    resize:vertical;
+}
+
+label{
+    font-weight:bold;
+    font-size:14px;
+}
+
+.section-title{
+    margin:30px 0 15px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+}
+
+.table-wrap{
+    overflow-x:auto;
+    background:white;
+    border-radius:18px;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+}
+
+th,td{
+    padding:13px;
+    border-bottom:1px solid #edf1f6;
+    text-align:right;
+}
+
+th{
+    background:#f8fafc;
+}
+
+.footer{
+    margin-top:45px;
+    background:#0f172a;
+    color:white;
+    padding:30px 0;
+    text-align:center;
+}
+
+.flash{
+    margin:15px 0;
+    padding:13px;
+    border-radius:12px;
+    background:#dcfce7;
+    color:#166534;
+}
+
+.stat{
+    font-size:30px;
+    font-weight:900;
+    color:{{ settings.primary_color }};
+}
+
+.admin-bar{
+    background:#111827;
+    color:white;
+    padding:10px;
+    text-align:center;
+}
+
+.ai-box{
+    background:white;
+    padding:20px;
+    border-radius:20px;
+    box-shadow:0 5px 20px rgba(0,0,0,.07);
+    line-height:2;
+    white-space:pre-wrap;
+}
+
+.video{
+    width:100%;
+    aspect-ratio:16/9;
+    border:0;
+    border-radius:18px;
+}
+
+@media(max-width:700px){
+
+    .nav-inner{
+        flex-direction:column;
+        padding:12px 0;
+    }
+
+    .nav-links{
+        justify-content:center;
+    }
+
+    .hero h1{
+        font-size:24px;
+    }
+
+    .grid{
+        grid-template-columns:
+        repeat(2,1fr);
+    }
+
+}
+
+@media(max-width:450px){
+
+    .grid{
+        grid-template-columns:1fr;
+    }
+
+}
+
+</style>
+
 </head>
+
 <body>
+
+{% if session.get("admin") %}
+<div class="admin-bar">
+    <a href="{{ url_for('admin') }}">
+        لوحة تحكم الإدارة
+    </a>
+    |
+    <a href="{{ url_for('admin_logout') }}">
+        تسجيل الخروج
+    </a>
+</div>
+{% endif %}
+
 <nav class="navbar">
+
 <div class="container nav-inner">
-<a class="brand" href="{{{{ url_for('home') }}}}">
-{{% if settings.logo_url %}}
-<img src="{{{{ settings.logo_url }}}}" alt="logo">
-{{% else %}}
-<div style="width:42px;height:42px;border-radius:50%;background:#fff;color:#123;display:grid;place-items:center;font-weight:bold;">AI</div>
-{{% endif %}}
-<span>{{{{ settings.site_name }}}}</span>
+
+<a class="brand" href="{{ url_for('home') }}">
+
+{% if settings.logo %}
+<img src="{{ settings.logo }}">
+{% else %}
+<div class="card-icon" style="margin:0;width:42px;height:42px;">
+<i class="fa-solid fa-graduation-cap"></i>
+</div>
+{% endif %}
+
+<span>
+{{ settings.site_name }}
+</span>
+
 </a>
+
 <div class="nav-links">
-<a href="{{{{ url_for('home') }}}}">الرئيسية</a>
-{{% if session.get('student_id') %}}
-<a href="{{{{ url_for('translation') }}}}">الترجمة</a>
-<a href="{{{{ url_for('summary') }}}}">الملخصات</a>
-<a href="{{{{ url_for('mindmap') }}}}">المخططات</a>
-<a href="{{{{ url_for('exam') }}}}">الاختبارات</a>
-<a href="{{{{ url_for('announcements') }}}}">الإعلانات</a>
-<a href="{{{{ url_for('logout') }}}}">خروج</a>
-{{% endif %}}
+
+<a href="{{ url_for('home') }}">
+<i class="fa-solid fa-house"></i>
+الرئيسية
+</a>
+
+<a href="{{ url_for('subjects') }}">
+<i class="fa-solid fa-book"></i>
+المواد
+</a>
+
+<a href="{{ url_for('ai') }}">
+<i class="fa-solid fa-robot"></i>
+الذكاء الاصطناعي
+</a>
+
+<a href="{{ url_for('exams') }}">
+<i class="fa-solid fa-file-pen"></i>
+الاختبارات
+</a>
+
+<a href="{{ url_for('profile') }}">
+<i class="fa-solid fa-user"></i>
+حسابي
+</a>
+
 </div>
+
 </div>
+
 </nav>
-<main class="page">
-<div class="container">
-{{% with messages = get_flashed_messages(with_categories=true) %}}
-{{% for category, message in messages %}}
-<div class="alert {{{{ 'error' if category == 'error' else '' }}}}">{{{{ message }}}}</div>
-{{% endfor %}}
-{{% endwith %}}
-{body}
+
+<main class="container">
+
+{% with messages = get_flashed_messages() %}
+{% for message in messages %}
+<div class="flash">
+{{ message }}
 </div>
+{% endfor %}
+{% endwith %}
+
+{{ content|safe }}
+
 </main>
-{UPLOAD_PROCESS_SCRIPT}
+
 <footer class="footer">
+
 <div class="container">
-{{{{ settings.university_notice }}}}<br>
-<span>منصة تعليمية ذكية</span>
+
+<strong>{{ settings.site_name }}</strong>
+
+<br>
+
+{{ settings.welcome }}
+
+<br><br>
+
+جميع الحقوق محفوظة © {{ now.year }}
+
 </div>
+
 </footer>
+
 </body>
 </html>
 """
-    return render_template_string(template, settings=settings, **context)
 
 
-# ============================================================
-# LOADING + ATTENDANCE
-# ============================================================
+def render_page(title, content, **context):
+
+    s = settings()
+
+    return render_template_string(
+        BASE,
+        title=title,
+        content=render_template_string(
+            content,
+            settings=s,
+            now=datetime.now(),
+            **context
+        ),
+        settings=s,
+        now=datetime.now(),
+        **context
+    )
+
+
+# =========================================================
+# HOME
+# =========================================================
 
 @app.route("/")
-def root():
-    return redirect(url_for("loading"))
+def home():
 
+    conn = db()
 
-@app.route("/loading")
-def loading():
-    settings = get_settings()
-    logo = (
-        f"<img class='loading-logo' src='{settings['logo_url']}' alt='logo'>"
-        if settings["logo_url"]
-        else "<div class='loading-logo' style='display:grid;place-items:center;color:#123;font-size:28px;font-weight:bold;'>AI</div>"
-    )
-    html = f"""
-<div class="loading-screen">
-<div class="loading-content">
-{logo}
-<h1>{settings['site_name']}</h1>
-<p>{settings['university_notice']}</p>
-<p>جاري تجهيز المنصة التعليمية...</p>
-<div class="loader"><span></span></div>
-<p>يرجى الانتظار 5 ثوانٍ</p>
+    subjects = conn.execute("""
+        SELECT * FROM subjects
+        ORDER BY id DESC
+    """).fetchall()
+
+    announcements = conn.execute("""
+        SELECT * FROM announcements
+        ORDER BY id DESC
+        LIMIT 5
+    """).fetchall()
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+
+<h1>
+<i class="fa-solid fa-graduation-cap"></i>
+{{ settings.site_name }}
+</h1>
+
+<p>
+{{ settings.welcome }}
+</p>
+
+{% if not session.get('student_name') %}
+
+<a class="btn"
+href="{{ url_for('attendance') }}">
+<i class="fa-solid fa-user-check"></i>
+دخول الطالب وتسجيل الحضور
+</a>
+
+{% endif %}
+
 </div>
+
+<div class="notice">
+<i class="fa-solid fa-bullhorn"></i>
+<strong>إعلان:</strong>
+{{ settings.notice }}
 </div>
-<script>
-setTimeout(function() {{
-    window.location.href = "{url_for('attendance')}";
-}}, 5000);
-</script>
+
+<div class="section-title">
+<h2>الخدمات التعليمية</h2>
+</div>
+
+<div class="grid">
+
+<div class="card">
+<div class="card-icon">
+<i class="fa-solid fa-book-open"></i>
+</div>
+<h3>المحاضرات</h3>
+<p>الوصول إلى المحاضرات والمواد التعليمية.</p>
+<a class="btn" href="{{ url_for('subjects') }}">الدخول</a>
+</div>
+
+<div class="card">
+<div class="card-icon">
+<i class="fa-solid fa-robot"></i>
+</div>
+<h3>مساعد Gemini</h3>
+<p>ترجمة وتلخيص وشرح وحل الأسئلة بالذكاء الاصطناعي.</p>
+<a class="btn" href="{{ url_for('ai') }}">استخدام المساعد</a>
+</div>
+
+<div class="card">
+<div class="card-icon">
+<i class="fa-solid fa-pen-to-square"></i>
+</div>
+<h3>الاختبارات</h3>
+<p>اختبارات إلكترونية ومعرفة النتائج.</p>
+<a class="btn" href="{{ url_for('exams') }}">الاختبارات</a>
+</div>
+
+<div class="card">
+<div class="card-icon">
+<i class="fa-solid fa-user-check"></i>
+</div>
+<h3>الحضور</h3>
+<p>سجل حضورك اليومي داخل المنصة.</p>
+<a class="btn" href="{{ url_for('attendance') }}">تسجيل الحضور</a>
+</div>
+
+</div>
+
+<div class="section-title">
+<h2>الكليات والمواد</h2>
+</div>
+
+<div class="grid">
+
+{% for subject in subjects %}
+
+<div class="card">
+
+<div class="card-icon">
+<i class="fa-solid {{ subject.icon }}"></i>
+</div>
+
+<h3>{{ subject.name }}</h3>
+
+<p>
+{{ subject.description }}
+</p>
+
+<a class="btn"
+href="{{ url_for('subject', subject_id=subject.id) }}">
+عرض المواد
+</a>
+
+</div>
+
+{% endfor %}
+
+</div>
+
+{% if announcements %}
+
+<div class="section-title">
+<h2>آخر الإعلانات</h2>
+</div>
+
+{% for a in announcements %}
+
+<div class="notice">
+
+<h3>{{ a.title }}</h3>
+
+<p style="margin-top:8px;">
+{{ a.content }}
+</p>
+
+<small>
+{{ a.created_at[:16] }}
+</small>
+
+</div>
+
+{% endfor %}
+
+{% endif %}
 """
-    return render_template_string(
-        f"""<!DOCTYPE html><html lang="ar" dir="rtl"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{settings['site_name']}</title>{BASE_STYLE}</head><body>{html}</body></html>""",
-        settings=settings
+
+    return render_page(
+        "الرئيسية",
+        content,
+        subjects=subjects,
+        announcements=announcements
     )
 
+
+# =========================================================
+# ATTENDANCE
+# =========================================================
 
 @app.route("/attendance", methods=["GET", "POST"])
 def attendance():
+
     if request.method == "POST":
-        full_name = request.form.get("full_name", "").strip()
+
+        name = request.form.get("name", "").strip()
+        college = request.form.get("college", "").strip()
+        department = request.form.get("department", "").strip()
         stage = request.form.get("stage", "").strip()
-        study_type = request.form.get("study_type", "").strip()
+        phone = request.form.get("phone", "").strip()
 
-        if len(full_name.split()) < 3:
-            flash("يرجى إدخال الاسم الثلاثي الكامل.", "error")
+        if not name:
+            flash("اكتب اسم الطالب.")
             return redirect(url_for("attendance"))
 
-        if not stage:
-            flash("يرجى اختيار المرحلة.", "error")
-            return redirect(url_for("attendance"))
+        conn = db()
 
-        if study_type not in ["morning", "evening"]:
-            flash("يرجى اختيار نوع الدراسة.", "error")
-            return redirect(url_for("attendance"))
+        student = conn.execute("""
+            SELECT * FROM students
+            WHERE name=?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (name,)).fetchone()
 
-        db = get_db()
-        cursor = db.execute("""
-            INSERT INTO students (full_name, stage, study_type, created_at)
-            VALUES (?, ?, ?, ?)
+        if not student:
+
+            cur = conn.execute("""
+                INSERT INTO students
+                (name,college,department,stage,phone,created_at)
+                VALUES(?,?,?,?,?,?)
+            """, (
+                name,
+                college,
+                department,
+                stage,
+                phone,
+                datetime.now().isoformat()
+            ))
+
+            student_id = cur.lastrowid
+
+        else:
+            student_id = student["id"]
+
+        today = str(date.today())
+
+        existing = conn.execute("""
+            SELECT id FROM attendance
+            WHERE student_id=?
+            AND attendance_date=?
         """, (
-            full_name, stage, study_type,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ))
-        student_id = cursor.lastrowid
-        db.commit()
-        db.close()
+            student_id,
+            today
+        )).fetchone()
 
-        session["student_id"] = student_id
-        session["student_name"] = full_name
-        session["student_stage"] = stage
-        session["student_study_type"] = study_type
+        if not existing:
 
+            conn.execute("""
+                INSERT INTO attendance
+                (student_id,attendance_date,created_at)
+                VALUES(?,?,?)
+            """, (
+                student_id,
+                today,
+                datetime.now().isoformat()
+            ))
+
+        conn.commit()
+        conn.close()
+
+        session["student_name"] = name
+
+        flash("تم تسجيل حضورك بنجاح.")
         return redirect(url_for("home"))
 
-    body = """
-<div class="card form-card">
-<h2>تسجيل الحضور الإجباري</h2>
-<p>قبل الدخول إلى المنصة يجب تسجيل الحضور.</p>
-<form method="POST">
-<div class="form-group">
-<label>اسم الطالب الثلاثي</label>
-<input type="text" name="full_name" placeholder="مثال: محمد علي حسن" required>
-</div>
-<div class="form-group">
-<label>المرحلة الدراسية</label>
-<select name="stage" required>
-<option value="">اختر المرحلة</option>
-<option>المرحلة الأولى</option><option>المرحلة الثانية</option>
-<option>المرحلة الثالثة</option><option>المرحلة الرابعة</option>
-<option>المرحلة الخامسة</option><option>المرحلة السادسة</option>
-<option>دراسات عليا</option>
-</select>
-</div>
-<div class="form-group">
-<label>نوع الدراسة</label>
-<select name="study_type" required>
-<option value="">اختر نوع الدراسة</option>
-<option value="morning">☀️ صباحي</option>
-<option value="evening">🌙 مسائي</option>
-</select>
-</div>
-<button class="btn" type="submit">تسجيل الحضور والدخول</button>
-</form>
-</div>
-"""
-    return render_page("تسجيل الحضور", body)
+    content = """
 
-
-# ============================================================
-# HOME
-# ============================================================
-
-@app.route("/home")
-@login_required
-def home():
-    body = """
 <div class="hero">
-<h1>منصة التعليم الذكي</h1>
+<h1>تسجيل حضور الطالب</h1>
 <p>
-أهلاً بك <strong>{{ session.get('student_name') }}</strong><br>
-منصة تعليمية تساعدك على ترجمة المحاضرات، تلخيصها،
-تحويلها إلى مخططات وإنشاء اختبارات ثنائية اللغة.
+سجل معلوماتك للدخول إلى المنصة.
 </p>
 </div>
-<div class="grid">
-<a class="card feature-card" href="{{ url_for('translation') }}"><div class="icon">🌍</div><h2>الترجمة الذكية</h2><p>ترجمة المحتوى مع إبقاء المصطلح الإنجليزي وإضافة معناه العربي.</p></a>
-<a class="card feature-card" href="{{ url_for('summary') }}"><div class="icon">📚</div><h2>الملخصات</h2><p>ملخص عربي واضح مع ترجمة المصطلحات الإنجليزية المهمة.</p></a>
-<a class="card feature-card" href="{{ url_for('mindmap') }}"><div class="icon">🧠</div><h2>المخططات</h2><p>مخططات ذهنية مرتبة بالعربي مع المصطلحات الإنجليزية ومعانيها.</p></a>
-<a class="card feature-card" href="{{ url_for('exam') }}"><div class="icon">📝</div><h2>الاختبارات</h2><p>10 أسئلة جامعية، السؤال بالعربي والإنكليزي مع التصحيح.</p></a>
-<a class="card feature-card" href="{{ url_for('announcements') }}"><div class="icon">📢</div><h2>إعلانات الجامعة</h2><p>آخر الإعلانات والتنبيهات الخاصة بالمنصة.</p></a>
-<div class="card"><div class="icon">🤖</div><h2>AI</h2><p>معالجة PDF والصور مباشرة من الموقع.</p></div>
-</div>
-"""
-    return render_page("الرئيسية", body)
 
-
-# ============================================================
-# TRANSLATION
-# ============================================================
-
-@app.route("/translation", methods=["GET", "POST"])
-@login_required
-def translation():
-    result = None
-    item_id = None
-
-    if request.method == "POST":
-        target_language = request.form.get("target_language", "Arabic")
-        uploaded = request.files.get("file")
-
-        try:
-            prompt = f"""
-You are a professional university translation and OCR assistant.
-Target language: {target_language}
-
-{bilingual_rules()}
-
-The student wants the result to be immediately useful for study.
-If the source contains English:
-- translate every meaningful English word, phrase, sentence and technical term into Arabic;
-- keep the original English term next to its Arabic meaning;
-- organize the result by headings and paragraphs.
-
-If the source is an image, read visible text accurately before translating it.
-If the source is Arabic and contains English terms, translate those English terms into Arabic too.
-Return the complete translated and organized result only.
-"""
-            result = process_uploaded_file(uploaded, prompt)
-            item_id = save_generated_item(
-                session["student_id"], "translation",
-                "AI Translation", result
-            )
-        except Exception as error:
-            result = "حدث خطأ أثناء الترجمة:\n" + str(error)
-
-    body = """
-<div class="hero">
-<h1>🌍 الترجمة الذكية</h1>
-<p>ارفع PDF أو صورة، وسيتم استخراج المحتوى وترجمته مع إظهار الإنجليزية والعربية معاً.</p>
-</div>
 <div class="card">
-<form method="POST" enctype="multipart/form-data">
-<div class="upload-box">
-<h3>📎 رفع المحاضرة</h3>
-<input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.pptx,.xlsx,.txt,.md,.csv" required>
-<p class="small">PDF أو صورة أو Word أو PowerPoint أو Excel أو TXT/CSV/MD — الحد الأقصى 20MB</p>
-</div>
-<div class="form-group">
-<label>اللغة المطلوبة</label>
-<select name="target_language">
-<option value="Arabic">العربية</option>
-<option value="English">English</option>
-<option value="French">Français</option>
-<option value="Turkish">Türkçe</option>
-<option value="German">Deutsch</option>
-</select>
-</div>
-<button class="btn" type="submit">🚀 ترجمة الملف الآن</button>
-</form>
-{% if result %}
-<div class="summary-card" id="translationCard" style="margin-top:25px;">
-<h2>🌍 النتيجة</h2>
-<div class="result">{{ result }}</div>
-</div>
-{{ actions|safe }}
-{% endif %}
-</div>
-"""
-    actions = result_actions(item_id, "translationCard", "ترجمة المحاضرة")
-    return render_page("الترجمة", body, result=result, actions=actions)
 
-
-# ============================================================
-# SUMMARY
-# ============================================================
-
-@app.route("/summary", methods=["GET", "POST"])
-@login_required
-def summary():
-    result = None
-    item_id = None
-
-    if request.method == "POST":
-        uploaded = request.files.get("file")
-        try:
-            prompt = f"""
-You are an expert university academic summarization assistant.
-Analyze the complete lecture.
-
-{bilingual_rules()}
-
-Create a clear Arabic study summary.
-Requirements:
-1. Major topics and headings.
-2. Important concepts and definitions.
-3. Difficult concepts explained simply.
-4. Bullet points.
-5. Important comparisons and formulas.
-6. For every important English word/term, write English + Arabic meaning.
-7. If a full English sentence is important, show the English sentence and its Arabic translation.
-8. Finish with: Quick Review (مراجعة سريعة), Important Terms (المصطلحات المهمة), Important Points (النقاط المهمة).
-Return clean study-ready text.
-"""
-            result = process_uploaded_file(uploaded, prompt)
-            item_id = save_generated_item(
-                session["student_id"], "summary",
-                "AI Summary", result
-            )
-        except Exception as error:
-            result = "حدث خطأ أثناء إنشاء الملخص:\n" + str(error)
-
-    body = """
-<div class="hero">
-<h1>📚 الملخصات الذكية</h1>
-<p>ارفع المحاضرة وسيتم إنشاء ملخص عربي واضح مع ترجمة المصطلحات الإنجليزية.</p>
-</div>
-<div class="card">
-<form method="POST" enctype="multipart/form-data">
-<div class="upload-box">
-<h3>📎 رفع المحاضرة</h3>
-<input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.pptx,.xlsx,.txt,.md,.csv" required>
-</div>
-<button class="btn" type="submit">✨ إنشاء الملخص</button>
-</form>
-{% if result %}
-<div class="summary-card" id="summaryCard" style="margin-top:25px;">
-<h2>📚 الملخص</h2>
-<div class="result">{{ result }}</div>
-</div>
-{{ actions|safe }}
-{% endif %}
-</div>
-"""
-    actions = result_actions(item_id, "summaryCard", "ملخص المحاضرة")
-    return render_page("الملخصات", body, result=result, actions=actions)
-
-
-# ============================================================
-# MIND MAP
-# ============================================================
-
-@app.route("/mindmap", methods=["GET", "POST"])
-@login_required
-def mindmap():
-    result = None
-    item_id = None
-
-    if request.method == "POST":
-        uploaded = request.files.get("file")
-        try:
-            prompt = f"""
-You are a university academic mind-map assistant.
-
-{bilingual_rules()}
-
-Analyze the entire lecture and return ONLY valid JSON:
-{{
-  "title": "Arabic title",
-  "branches": [
-    {{
-      "title": "Arabic branch title + English term when useful",
-      "points": [
-        "Arabic point with English term and Arabic meaning when useful"
-      ]
-    }}
-  ]
-}}
-Requirements:
-- Cover the important parts of the lecture.
-- Keep the map concise and educational.
-- Every English term must have its Arabic meaning.
-- Do not invent information.
-"""
-            raw = process_uploaded_file(uploaded, prompt)
-            result = extract_json(raw)
-            item_id = save_generated_item(
-                session["student_id"], "mindmap",
-                "AI Mind Map", json.dumps(result, ensure_ascii=False)
-            )
-        except Exception as error:
-            result = {
-                "title": "خطأ في المخطط",
-                "branches": [{"title": "Error", "points": [str(error)]}]
-            }
-
-    body = """
-<div class="hero">
-<h1>🧠 المخططات الذكية</h1>
-<p>مخطط ذهني منظم مع العربية وترجمة المصطلحات الإنجليزية.</p>
-</div>
-<div class="card">
-<form method="POST" enctype="multipart/form-data">
-<div class="upload-box">
-<input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.pptx,.xlsx,.txt,.md,.csv" required>
-</div>
-<button class="btn" type="submit">🧠 إنشاء المخطط</button>
-</form>
-{% if result %}
-<div class="summary-card" id="mindMapCard" style="margin-top:25px;">
-<h2>🧠 {{ result.title }}</h2>
-<div class="mind-map">
-{% for branch in result.branches %}
-<div class="mind-node">
-<strong>{{ branch.title }}</strong>
-{% for point in branch.points %}
-<div style="margin-top:8px;padding:8px;background:#f5f8fc;border-radius:8px;">{{ point }}</div>
-{% endfor %}
-</div>
-{% endfor %}
-</div>
-</div>
-{{ actions|safe }}
-{% endif %}
-</div>
-"""
-    actions = result_actions(item_id, "mindMapCard", "المخطط الذهني")
-    return render_page("المخططات", body, result=result, actions=actions)
-
-
-# ============================================================
-# EXAM
-# ============================================================
-
-@app.route("/exam", methods=["GET", "POST"])
-@login_required
-def exam():
-    exam_data = None
-    item_id = None
-
-    if request.method == "POST":
-        uploaded = request.files.get("file")
-        try:
-            prompt = f"""
-You are an experienced university examination designer.
-
-{bilingual_rules()}
-
-Analyze the entire uploaded academic material.
-Create exactly 10 methodology-based university questions covering different sections.
-
-Return ONLY valid JSON:
-{{
-  "title": "Arabic exam title",
-  "questions": [
-    {{
-      "number": 1,
-      "type": "mcq",
-      "question_ar": "السؤال بالعربية",
-      "question_en": "Question in English",
-      "options_ar": ["الخيار 1","الخيار 2","الخيار 3","الخيار 4"],
-      "options_en": ["Option 1","Option 2","Option 3","Option 4"],
-      "answer": 0,
-      "explanation_ar": "شرح الإجابة بالعربية",
-      "explanation_en": "Explanation in English"
-    }}
-  ]
-}}
-
-Rules:
-1. Exactly 10 questions.
-2. Each question must be answerable from the material.
-3. Do not invent facts.
-4. Use different important concepts.
-5. Four options for MCQ.
-6. answer is zero-based correct option index.
-7. Include Arabic and English for every question and option.
-8. Include a short Arabic and English explanation.
-"""
-            raw = process_uploaded_file(uploaded, prompt)
-            exam_data = extract_json(raw)
-
-            if len(exam_data.get("questions", [])) != 10:
-                raise ValueError("AI did not generate exactly 10 questions.")
-
-            for q in exam_data["questions"]:
-                q.setdefault("question_ar", q.get("question", ""))
-                q.setdefault("question_en", q.get("question_ar", ""))
-                q.setdefault("options_ar", q.get("options", []))
-                q.setdefault("options_en", q.get("options", []))
-                q.setdefault("explanation_ar", q.get("explanation", ""))
-                q.setdefault("explanation_en", q.get("explanation", ""))
-
-            session["current_exam"] = exam_data
-            item_id = save_generated_item(
-                session["student_id"], "exam",
-                exam_data.get("title", "AI Exam"),
-                json.dumps(exam_data, ensure_ascii=False)
-            )
-        except Exception as error:
-            flash("حدث خطأ في إنشاء الاختبار: " + str(error), "error")
-            return redirect(url_for("exam"))
-
-    body = """
-<div class="hero">
-<h1>📝 الاختبارات الذكية</h1>
-<p>10 أسئلة جامعية — السؤال والخيارات بالعربي والإنكليزي — مع التصحيح والشرح.</p>
-</div>
-<div class="card">
-<form method="POST" enctype="multipart/form-data">
-<div class="upload-box">
-<h3>📚 رفع المادة</h3>
-<input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.docx,.pptx,.xlsx,.txt,.md,.csv" required>
-</div>
-<button class="btn" type="submit">🚀 إنشاء 10 أسئلة</button>
-</form>
-</div>
-
-{% if exam_data %}
-<div class="card" style="margin-top:25px;" id="examCard">
-<h2>{{ exam_data.title }}</h2>
-<form id="examForm">
-{% for question in exam_data.questions %}
-<div class="exam-question">
-<h3>{{ question.number }}. {{ question.question_ar }}</h3>
-<p><strong>English:</strong> {{ question.question_en }}</p>
-
-{% for option in question.options_ar %}
-<label class="option">
-<input type="radio" name="q{{ loop.index0 }}" value="{{ loop.index0 }}" required>
-<strong>{{ loop.index }}.</strong> {{ option }}
-{% if question.options_en|length > loop.index0 %}
-<br><span class="small">{{ question.options_en[loop.index0] }}</span>
-{% endif %}
-</label>
-{% endfor %}
-
-<div class="explanation" style="display:none;margin-top:12px;">
-<strong>الإجابة الصحيحة:</strong>
-<span class="correct-answer">
-{{ question.options_ar[question.answer] if question.answer < question.options_ar|length else '' }}
-</span>
-<br>{{ question.explanation_ar }}
-<br><span class="small">{{ question.explanation_en }}</span>
-</div>
-</div>
-{% endfor %}
-<button class="btn" type="button" onclick="gradeExam()">✅ تصحيح الاختبار</button>
-</form>
-<div id="examResult" class="result" style="display:none;"></div>
-</div>
-{{ actions|safe }}
-
-<script>
-const examAnswers = {{ exam_data.questions | map(attribute='answer') | list | tojson }};
-
-function gradeExam() {
-    let score = 0;
-    for (let i = 0; i < examAnswers.length; i++) {
-        const selected = document.querySelector('input[name="q' + i + '"]:checked');
-        if (selected && Number(selected.value) === Number(examAnswers[i])) score++;
-    }
-
-    document.querySelectorAll(".explanation").forEach(el => el.style.display = "block");
-
-    const result = document.getElementById("examResult");
-    result.style.display = "block";
-    const percentage = score * 10;
-    result.innerHTML =
-        "<h2>نتيجة الاختبار</h2>" +
-        "<strong>" + score + " / 10</strong><br>" +
-        "<strong>" + percentage + "%</strong><br><br>" +
-        (score >= 5 ? "أحسنت، واصل المراجعة والتدريب." : "راجع المادة وحاول مرة أخرى.");
-    result.scrollIntoView({behavior:"smooth"});
-}
-</script>
-{% endif %}
-"""
-    actions = result_actions(item_id, "examCard", "الاختبار الجامعي")
-    return render_page("الاختبارات", body, exam_data=exam_data, actions=actions)
-
-
-# ============================================================
-# ANNOUNCEMENTS
-# ============================================================
-
-@app.route("/announcements")
-@login_required
-def announcements():
-    db = get_db()
-    announcements = db.execute(
-        "SELECT * FROM announcements ORDER BY id DESC"
-    ).fetchall()
-    db.close()
-
-    body = """
-<div class="hero">
-<h1>📢 إعلانات جامعة الأنبار</h1>
-<p>آخر الأخبار والتنبيهات والإعلانات.</p>
-</div>
-<div class="grid">
-{% for item in announcements %}
-<div class="card">
-<h2>{{ item.title }}</h2>
-<p style="line-height:2;">{{ item.content }}</p>
-<small>{{ item.created_at }}</small>
-</div>
-{% else %}
-<div class="card"><h3>لا توجد إعلانات حالياً.</h3></div>
-{% endfor %}
-</div>
-"""
-    return render_page("الإعلانات", body, announcements=announcements)
-
-
-# ============================================================
-# DOWNLOAD GENERATED RESULT
-# ============================================================
-
-@app.route("/download/<int:item_id>")
-@login_required
-def download_item(item_id):
-    db = get_db()
-    item = db.execute(
-        "SELECT * FROM generated_items WHERE id = ? AND student_id = ?",
-        (item_id, session["student_id"])
-    ).fetchone()
-    db.close()
-
-    if not item:
-        flash("الملف غير موجود.", "error")
-        return redirect(url_for("home"))
-
-    return export_text(item["title"], item["content"])
-
-
-# ============================================================
-# ADMIN LOGIN
-# ============================================================
-
-@app.route("/admin/login", methods=["GET", "POST"])
-def admin_login():
-    if request.method == "POST":
-        password = request.form.get("password", "")
-        if password == ADMIN_PASSWORD:
-            session["admin_logged_in"] = True
-            return redirect(url_for("admin"))
-        flash("كلمة المرور غير صحيحة.", "error")
-
-    body = """
-<div class="card form-card">
-<h2>🔐 لوحة الإدارة</h2>
 <form method="POST">
-<div class="form-group">
-<label>كلمة مرور الإدارة</label>
-<input type="password" name="password" required>
-</div>
-<button class="btn" type="submit">دخول الإدارة</button>
+
+<label>اسم الطالب</label>
+<input class="input"
+name="name"
+required
+placeholder="اكتب اسمك الكامل">
+
+<label>الكلية</label>
+<input class="input"
+name="college"
+placeholder="مثال: كلية العلوم">
+
+<label>القسم</label>
+<input class="input"
+name="department"
+placeholder="مثال: قسم علوم الحاسوب">
+
+<label>المرحلة</label>
+
+<select class="input" name="stage">
+
+<option value="">اختر المرحلة</option>
+<option>الأولى</option>
+<option>الثانية</option>
+<option>الثالثة</option>
+<option>الرابعة</option>
+<option>الخامسة</option>
+<option>السادسة</option>
+
+</select>
+
+<label>رقم الهاتف</label>
+
+<input class="input"
+name="phone"
+placeholder="اختياري">
+
+<button class="btn" type="submit">
+<i class="fa-solid fa-check"></i>
+تسجيل الحضور والدخول
+</button>
+
 </form>
+
 </div>
 """
-    return render_page("Admin Login", body)
 
-
-# ============================================================
-# ADMIN DASHBOARD - STATS + ATTENDANCE + SETTINGS
-# ============================================================
-
-@app.route("/admin")
-@admin_required
-def admin():
-    db = get_db()
-
-    students = db.execute(
-        "SELECT * FROM students ORDER BY id DESC"
-    ).fetchall()
-
-    announcements = db.execute(
-        "SELECT * FROM announcements ORDER BY id DESC"
-    ).fetchall()
-
-    generated_count = db.execute(
-        "SELECT COUNT(*) AS total FROM generated_items"
-    ).fetchone()["total"]
-
-    total_students = db.execute(
-        "SELECT COUNT(*) AS total FROM students"
-    ).fetchone()["total"]
-
-    morning_count = db.execute(
-        "SELECT COUNT(*) AS total FROM students WHERE study_type='morning'"
-    ).fetchone()["total"]
-
-    evening_count = db.execute(
-        "SELECT COUNT(*) AS total FROM students WHERE study_type='evening'"
-    ).fetchone()["total"]
-
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_count = db.execute(
-        "SELECT COUNT(*) AS total FROM students WHERE substr(created_at,1,10)=?",
-        (today,)
-    ).fetchone()["total"]
-
-    stage_rows = db.execute("""
-        SELECT stage, COUNT(*) AS total
-        FROM students
-        GROUP BY stage
-        ORDER BY total DESC
-    """).fetchall()
-
-    db.close()
-
-    body = """
-<div class="hero">
-<h1>⚙️ لوحة التحكم</h1>
-<p>إحصائيات الطلاب، قائمة الحضور، الإعلانات وإعدادات الموقع.</p>
-</div>
-
-<div class="kpi">
-<div class="card stat"><strong>{{ total_students }}</strong>إجمالي الطلاب</div>
-<div class="card stat"><strong>{{ today_count }}</strong>حضور اليوم</div>
-<div class="card stat"><strong>{{ morning_count }}</strong>دراسة صباحية</div>
-<div class="card stat"><strong>{{ evening_count }}</strong>دراسة مسائية</div>
-<div class="card stat"><strong>{{ generated_count }}</strong>عمليات AI</div>
-<div class="card stat"><strong>{{ announcements|length }}</strong>الإعلانات</div>
-</div>
-
-<div class="card">
-<h2>📊 توزيع الطلاب حسب المرحلة</h2>
-<div class="grid">
-{% for row in stage_rows %}
-<div class="card stat">
-<strong>{{ row.total }}</strong>
-{{ row.stage }}
-</div>
-{% else %}
-<p>لا توجد بيانات.</p>
-{% endfor %}
-</div>
-</div>
-
-<div class="card" style="margin-top:25px;">
-<h2>👨‍🎓 قائمة الحضور</h2>
-<div style="overflow:auto;">
-<table class="admin-table">
-<thead><tr>
-<th>#</th><th>اسم الطالب</th><th>المرحلة</th>
-<th>الدراسة</th><th>وقت الحضور</th>
-</tr></thead>
-<tbody>
-{% for student in students %}
-<tr>
-<td>{{ student.id }}</td>
-<td>{{ student.full_name }}</td>
-<td>{{ student.stage }}</td>
-<td>{{ "صباحي" if student.study_type == "morning" else "مسائي" }}</td>
-<td>{{ student.created_at }}</td>
-</tr>
-{% else %}
-<tr><td colspan="5">لا يوجد حضور مسجل.</td></tr>
-{% endfor %}
-</tbody>
-</table>
-</div>
-</div>
-
-<div class="card" style="margin-top:25px;">
-<h2>⚙️ إعدادات الموقع</h2>
-<form method="POST" action="{{ url_for('update_settings') }}" enctype="multipart/form-data">
-
-<div class="form-group">
-<label>اسم الموقع</label>
-<input name="site_name" value="{{ settings.site_name }}" required>
-</div>
-
-<div class="form-group">
-<label>رابط الشعار (اختياري)</label>
-<input name="logo_url" value="{{ settings.logo_url }}" placeholder="https://...">
-</div>
-
-<div class="form-group">
-<label>أو ارفع شعاراً من جهازك</label>
-<input type="file" name="logo_file" accept=".png,.jpg,.jpeg,.webp">
-</div>
-
-{% if settings.logo_url %}
-<img src="{{ settings.logo_url }}" alt="logo" style="width:90px;height:90px;object-fit:cover;border-radius:50%;margin:8px 0;">
-{% endif %}
-
-<div class="form-group">
-<label>لون الموقع الرئيسي</label>
-<input type="color" name="primary_color" value="{{ settings.primary_color }}">
-</div>
-
-<div class="form-group">
-<label>لون الخلفية/الهيدر</label>
-<input type="color" name="secondary_color" value="{{ settings.secondary_color }}">
-</div>
-
-<div class="form-group">
-<label>إشعار الجامعة</label>
-<input name="university_notice" value="{{ settings.university_notice }}">
-</div>
-
-<button class="btn" type="submit">💾 حفظ الإعدادات</button>
-</form>
-</div>
-
-<div class="card" style="margin-top:25px;">
-<h2>📢 إضافة إعلان</h2>
-<form method="POST" action="{{ url_for('add_announcement') }}">
-<div class="form-group"><label>عنوان الإعلان</label><input name="title" required></div>
-<div class="form-group"><label>نص الإعلان</label><textarea name="content" required></textarea></div>
-<button class="btn" type="submit">📢 نشر الإعلان</button>
-</form>
-</div>
-
-<div style="margin-top:20px;">
-<a class="btn" href="{{ url_for('admin_logout') }}">تسجيل خروج الإدارة</a>
-</div>
-"""
     return render_page(
-        "لوحة التحكم", body,
-        students=students,
-        announcements=announcements,
-        generated_count=generated_count,
-        total_students=total_students,
-        morning_count=morning_count,
-        evening_count=evening_count,
-        today_count=today_count,
-        stage_rows=stage_rows
+        "تسجيل الحضور",
+        content
     )
 
 
-@app.route("/admin/settings", methods=["POST"])
-@admin_required
-def update_settings():
-    site_name = request.form.get("site_name", "").strip()
-    logo_url = request.form.get("logo_url", "").strip()
-    primary_color = request.form.get("primary_color", "#0d6efd").strip()
-    secondary_color = request.form.get("secondary_color", "#07111f").strip()
-    university_notice = request.form.get(
-        "university_notice", "جامعة الأنبار"
-    ).strip()
+# =========================================================
+# SUBJECTS
+# =========================================================
 
-    logo_file = request.files.get("logo_file")
-    if logo_file and logo_file.filename:
-        filename = secure_filename(logo_file.filename)
-        extension = filename.rsplit(".", 1)[1].lower() if "." in filename else ""
-        if extension not in {"png", "jpg", "jpeg", "webp"}:
-            flash("صيغة الشعار غير مسموحة. استخدم PNG أو JPG أو WEBP.", "error")
-            return redirect(url_for("admin"))
+@app.route("/subjects")
+def subjects():
 
-        saved_name = (
-            "site_logo_"
-            + datetime.now().strftime("%Y%m%d%H%M%S")
-            + "_"
-            + filename
+    conn = db()
+
+    rows = conn.execute("""
+        SELECT * FROM subjects
+        ORDER BY id DESC
+    """).fetchall()
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+<h1>المواد الدراسية</h1>
+<p>اختر الكلية أو المادة للوصول إلى المحاضرات.</p>
+</div>
+
+<div class="grid">
+
+{% for subject in rows %}
+
+<div class="card">
+
+<div class="card-icon">
+<i class="fa-solid {{ subject.icon }}"></i>
+</div>
+
+<h3>{{ subject.name }}</h3>
+
+<p>{{ subject.description }}</p>
+
+<a class="btn"
+href="{{ url_for('subject', subject_id=subject.id) }}">
+دخول المادة
+</a>
+
+</div>
+
+{% endfor %}
+
+</div>
+"""
+
+    return render_page(
+        "المواد",
+        content,
+        rows=rows
+    )
+
+
+@app.route("/subject/<int:subject_id>")
+def subject(subject_id):
+
+    conn = db()
+
+    subject_row = conn.execute("""
+        SELECT * FROM subjects
+        WHERE id=?
+    """, (subject_id,)).fetchone()
+
+    lessons = conn.execute("""
+        SELECT * FROM lessons
+        WHERE subject_id=?
+        ORDER BY lesson_number ASC,id ASC
+    """, (subject_id,)).fetchall()
+
+    conn.close()
+
+    if not subject_row:
+        return "المادة غير موجودة", 404
+
+    content = """
+
+<div class="hero">
+
+<h1>
+<i class="fa-solid {{ subject_row.icon }}"></i>
+{{ subject_row.name }}
+</h1>
+
+<p>
+{{ subject_row.description }}
+</p>
+
+</div>
+
+{% if lessons %}
+
+{% for lesson in lessons %}
+
+<div class="card" style="margin-bottom:15px;">
+
+<h3>
+المحاضرة {{ lesson.lesson_number }}
+:
+{{ lesson.title }}
+</h3>
+
+<p>
+{{ lesson.description }}
+</p>
+
+{% if lesson.video_url %}
+
+<div style="margin-top:15px;">
+
+<iframe
+class="video"
+src="{{ lesson.video_url }}"
+allowfullscreen>
+</iframe>
+
+</div>
+
+{% endif %}
+
+{% if lesson.file_url %}
+
+<a class="btn"
+href="{{ lesson.file_url }}"
+target="_blank">
+
+<i class="fa-solid fa-file"></i>
+فتح الملف
+
+</a>
+
+{% endif %}
+
+</div>
+
+{% endfor %}
+
+{% else %}
+
+<div class="card">
+لا توجد محاضرات مضافة لهذه المادة حالياً.
+</div>
+
+{% endif %}
+"""
+
+    return render_page(
+        subject_row["name"],
+        content,
+        subject_row=subject_row,
+        lessons=lessons
+    )
+
+
+# =========================================================
+# AI
+# =========================================================
+
+@app.route("/ai")
+def ai():
+
+    content = """
+
+<div class="hero">
+
+<h1>
+<i class="fa-solid fa-robot"></i>
+المساعد التعليمي الذكي
+</h1>
+
+<p>
+استخدم Gemini للترجمة والتلخيص والشرح وحل الأسئلة.
+</p>
+
+</div>
+
+<div class="grid">
+
+<div class="card">
+<div class="card-icon">
+<i class="fa-solid fa-language"></i>
+</div>
+<h3>الترجمة</h3>
+<p>ترجمة النصوص بين العربية والإنجليزية.</p>
+<a class="btn" href="{{ url_for('ai_tool',tool='translate') }}">
+ابدأ
+</a>
+</div>
+
+<div class="card">
+<div class="card-icon">
+<i class="fa-solid fa-compress"></i>
+</div>
+<h3>التلخيص</h3>
+<p>اختصر المحاضرات والنصوص الطويلة.</p>
+<a class="btn" href="{{ url_for('ai_tool',tool='summary') }}">
+ابدأ
+</a>
+</div>
+
+<div class="card">
+<div class="card-icon">
+<i class="fa-solid fa-brain"></i>
+</div>
+<h3>الخريطة الذهنية</h3>
+<p>حوّل الدرس إلى نقاط منظمة.</p>
+<a class="btn" href="{{ url_for('ai_tool',tool='mindmap') }}">
+ابدأ
+</a>
+</div>
+
+<div class="card">
+<div class="card-icon">
+<i class="fa-solid fa-circle-question"></i>
+</div>
+<h3>حل الأسئلة</h3>
+<p>أرسل السؤال واحصل على شرح للحل.</p>
+<a class="btn" href="{{ url_for('ai_tool',tool='solve') }}">
+ابدأ
+</a>
+</div>
+
+</div>
+"""
+
+    return render_page(
+        "الذكاء الاصطناعي",
+        content
+    )
+
+
+@app.route("/ai/<tool>", methods=["GET", "POST"])
+def ai_tool(tool):
+
+    names = {
+        "translate": "الترجمة الذكية",
+        "summary": "التلخيص الذكي",
+        "mindmap": "الخريطة الذهنية",
+        "solve": "حل الأسئلة"
+    }
+
+    if tool not in names:
+        return "الأداة غير موجودة", 404
+
+    result = ""
+
+    if request.method == "POST":
+
+        text = request.form.get("text", "").strip()
+
+        if text:
+
+            if tool == "translate":
+
+                prompt = f"""
+ترجم النص التالي ترجمة تعليمية دقيقة.
+إذا كان النص عربياً ترجمه إلى الإنجليزية،
+وإذا كان إنجليزياً ترجمه إلى العربية.
+
+النص:
+
+{text}
+"""
+
+            elif tool == "summary":
+
+                prompt = f"""
+لخص النص التالي للطالب الجامعي باللغة العربية.
+استخرج أهم الأفكار والنقاط والتعاريف.
+اجعل التلخيص واضحاً ومنظماً.
+
+النص:
+
+{text}
+"""
+
+            elif tool == "mindmap":
+
+                prompt = f"""
+حوّل النص التالي إلى خريطة ذهنية نصية منظمة باللغة العربية.
+استخدم عنواناً رئيسياً ثم محاور وفرعيات.
+
+النص:
+
+{text}
+"""
+
+            else:
+
+                prompt = f"""
+أنت مساعد تعليمي جامعي.
+حل السؤال التالي خطوة بخطوة باللغة العربية.
+اذكر القانون أو الفكرة المستخدمة ثم الحل والنتيجة.
+
+السؤال:
+
+{text}
+"""
+
+            result = ask_gemini(prompt)
+
+            save_ai_history(
+                tool,
+                text,
+                result
+            )
+
+    content = """
+
+<div class="hero">
+
+<h1>{{ names[tool] }}</h1>
+
+<p>
+اكتب النص ثم اضغط تنفيذ.
+</p>
+
+</div>
+
+<div class="card">
+
+<form method="POST">
+
+<textarea
+name="text"
+required
+placeholder="اكتب النص أو السؤال هنا..."></textarea>
+
+<button class="btn" type="submit">
+<i class="fa-solid fa-wand-magic-sparkles"></i>
+تنفيذ بواسطة Gemini
+</button>
+
+</form>
+
+</div>
+
+{% if result %}
+
+<div class="section-title">
+<h2>النتيجة</h2>
+</div>
+
+<div class="ai-box">
+{{ result }}
+</div>
+
+{% endif %}
+"""
+
+    return render_page(
+        names[tool],
+        content,
+        names=names,
+        tool=tool,
+        result=result
+    )
+
+
+# =========================================================
+# EXAMS
+# =========================================================
+
+@app.route("/exams")
+def exams():
+
+    conn = db()
+
+    rows = conn.execute("""
+        SELECT * FROM exams
+        ORDER BY id DESC
+    """).fetchall()
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+
+<h1>
+<i class="fa-solid fa-file-pen"></i>
+الاختبارات
+</h1>
+
+<p>
+اختبر معلوماتك وسجل نتيجتك.
+</p>
+
+</div>
+
+<div class="grid">
+
+{% for exam in rows %}
+
+<div class="card">
+
+<div class="card-icon">
+<i class="fa-solid fa-clipboard-question"></i>
+</div>
+
+<h3>{{ exam.title }}</h3>
+
+<p>
+المادة:
+{{ exam.subject }}
+</p>
+
+<p>
+المدة:
+{{ exam.duration }} دقيقة
+</p>
+
+<a class="btn"
+href="{{ url_for('exam', exam_id=exam.id) }}">
+بدء الاختبار
+</a>
+
+</div>
+
+{% else %}
+
+<div class="card">
+لا توجد اختبارات حالياً.
+</div>
+
+{% endfor %}
+
+</div>
+"""
+
+    return render_page(
+        "الاختبارات",
+        content,
+        rows=rows
+    )
+
+
+@app.route("/exam/<int:exam_id>", methods=["GET", "POST"])
+def exam(exam_id):
+
+    conn = db()
+
+    exam_row = conn.execute("""
+        SELECT * FROM exams
+        WHERE id=?
+    """, (exam_id,)).fetchone()
+
+    conn.close()
+
+    if not exam_row:
+        return "الاختبار غير موجود", 404
+
+    questions = []
+
+    for line in exam_row["questions"].splitlines():
+
+        if line.strip():
+            questions.append(line.strip())
+
+    if request.method == "POST":
+
+        score = 0
+        total = len(questions)
+
+        answer_key = []
+
+        for line in exam_row["answers"].splitlines():
+
+            if line.strip():
+                answer_key.append(line.strip())
+
+        for i in range(total):
+
+            user_answer = request.form.get(
+                f"q{i}",
+                ""
+            ).strip().lower()
+
+            correct = ""
+
+            if i < len(answer_key):
+                correct = answer_key[i].strip().lower()
+
+            if user_answer == correct:
+                score += 1
+
+        conn = db()
+
+        conn.execute("""
+            INSERT INTO results
+            (student_name,exam_id,score,total,created_at)
+            VALUES(?,?,?,?,?)
+        """, (
+            current_student() or "طالب",
+            exam_id,
+            score,
+            total,
+            datetime.now().isoformat()
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return redirect(
+            url_for(
+                "exam_result",
+                exam_id=exam_id,
+                score=score,
+                total=total
+            )
         )
-        logo_file.save(os.path.join(UPLOAD_FOLDER, saved_name))
-        logo_url = url_for("uploaded_file", filename=saved_name)
 
-    db = get_db()
-    db.execute("""
-        UPDATE settings
-        SET site_name=?, logo_url=?, primary_color=?,
-            secondary_color=?, university_notice=?
-        WHERE id=1
-    """, (
-        site_name, logo_url, primary_color,
-        secondary_color, university_notice
-    ))
-    db.commit()
-    db.close()
+    content = """
 
-    flash("تم تحديث اسم الموقع والشعار والألوان بنجاح.", "success")
-    return redirect(url_for("admin"))
+<div class="hero">
+
+<h1>{{ exam_row.title }}</h1>
+
+<p>
+المادة: {{ exam_row.subject }}
+</p>
+
+<p>
+الوقت المحدد:
+{{ exam_row.duration }} دقيقة
+</p>
+
+</div>
+
+<form method="POST">
+
+{% for q in questions %}
+
+<div class="card" style="margin-bottom:15px;">
+
+<h3>
+السؤال {{ loop.index }}
+</h3>
+
+<p style="margin:10px 0;line-height:1.9;">
+{{ q }}
+</p>
+
+<input
+class="input"
+name="q{{ loop.index0 }}"
+placeholder="اكتب إجابتك هنا"
+required>
+
+</div>
+
+{% endfor %}
+
+{% if questions %}
+
+<button class="btn btn-green" type="submit">
+
+<i class="fa-solid fa-paper-plane"></i>
+إرسال الاختبار
+
+</button>
+
+{% else %}
+
+<div class="card">
+لم تتم إضافة أسئلة لهذا الاختبار.
+</div>
+
+{% endif %}
+
+</form>
+"""
+
+    return render_page(
+        exam_row["title"],
+        content,
+        exam_row=exam_row,
+        questions=questions
+    )
 
 
-@app.route("/admin/announcement", methods=["POST"])
-@admin_required
-def add_announcement():
-    title = request.form.get("title", "").strip()
-    content = request.form.get("content", "").strip()
+@app.route("/exam/<int:exam_id>/result")
+def exam_result(exam_id):
 
-    if not title or not content:
-        flash("يرجى كتابة عنوان الإعلان ومحتواه.", "error")
-        return redirect(url_for("admin"))
+    score = int(request.args.get("score", 0))
+    total = int(request.args.get("total", 0))
 
-    db = get_db()
-    db.execute("""
-        INSERT INTO announcements (title, content, created_at)
-        VALUES (?, ?, ?)
-    """, (
-        title, content,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ))
-    db.commit()
-    db.close()
+    percentage = 0
 
-    flash("تم نشر الإعلان.", "success")
-    return redirect(url_for("admin"))
+    if total:
+        percentage = round(
+            score / total * 100
+        )
+
+    content = """
+
+<div class="hero">
+
+<h1>
+<i class="fa-solid fa-trophy"></i>
+نتيجة الاختبار
+</h1>
+
+<p>
+تم تسجيل نتيجتك بنجاح.
+</p>
+
+</div>
+
+<div class="card" style="text-align:center;">
+
+<div class="stat">
+{{ score }} / {{ total }}
+</div>
+
+<h2 style="margin-top:10px;">
+{{ percentage }}%
+</h2>
+
+<br>
+
+<a class="btn"
+href="{{ url_for('exams') }}">
+العودة إلى الاختبارات
+</a>
+
+</div>
+"""
+
+    return render_page(
+        "نتيجة الاختبار",
+        content,
+        score=score,
+        total=total,
+        percentage=percentage
+    )
 
 
-@app.route("/uploads/<path:filename>")
-def uploaded_file(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
+# =========================================================
+# PROFILE
+# =========================================================
+
+@app.route("/profile")
+def profile():
+
+    name = current_student()
+
+    if not name:
+        return redirect(url_for("attendance"))
+
+    conn = db()
+
+    student = conn.execute("""
+        SELECT * FROM students
+        WHERE name=?
+        ORDER BY id DESC
+        LIMIT 1
+    """, (name,)).fetchone()
+
+    attendance_count = 0
+
+    if student:
+
+        attendance_count = conn.execute("""
+            SELECT COUNT(*) AS c
+            FROM attendance
+            WHERE student_id=?
+        """, (
+            student["id"],
+        )).fetchone()["c"]
+
+    results = conn.execute("""
+        SELECT
+            results.*,
+            exams.title
+        FROM results
+        LEFT JOIN exams
+        ON exams.id=results.exam_id
+        WHERE results.student_name=?
+        ORDER BY results.id DESC
+        LIMIT 10
+    """, (name,)).fetchall()
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+
+<h1>
+<i class="fa-solid fa-user-graduate"></i>
+حساب الطالب
+</h1>
+
+<p>
+أهلاً {{ name }}
+</p>
+
+</div>
+
+<div class="grid">
+
+<div class="card">
+
+<h3>اسم الطالب</h3>
+
+<div class="stat"
+style="font-size:22px;margin-top:10px;">
+{{ student.name if student else name }}
+</div>
+
+</div>
+
+<div class="card">
+
+<h3>أيام الحضور</h3>
+
+<div class="stat">
+{{ attendance_count }}
+</div>
+
+</div>
+
+<div class="card">
+
+<h3>الكلية</h3>
+
+<p style="margin-top:10px;">
+{{ student.college if student else 'غير محددة' }}
+</p>
+
+</div>
+
+<div class="card">
+
+<h3>القسم</h3>
+
+<p style="margin-top:10px;">
+{{ student.department if student else 'غير محدد' }}
+</p>
+
+</div>
+
+</div>
+
+<div class="section-title">
+<h2>نتائج الاختبارات</h2>
+</div>
+
+<div class="table-wrap">
+
+<table>
+
+<tr>
+<th>الاختبار</th>
+<th>النتيجة</th>
+<th>النسبة</th>
+</tr>
+
+{% for r in results %}
+
+<tr>
+
+<td>{{ r.title or 'اختبار' }}</td>
+
+<td>
+{{ r.score }} / {{ r.total }}
+</td>
+
+<td>
+{% if r.total %}
+{{ ((r.score / r.total) * 100)|round|int }}%
+{% else %}
+0%
+{% endif %}
+</td>
+
+</tr>
+
+{% else %}
+
+<tr>
+<td colspan="3">
+لا توجد نتائج بعد.
+</td>
+</tr>
+
+{% endfor %}
+
+</table>
+
+</div>
+"""
+
+    return render_page(
+        "حسابي",
+        content,
+        name=name,
+        student=student,
+        attendance_count=attendance_count,
+        results=results
+    )
 
 
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("loading"))
+# =========================================================
+# NOTIFICATIONS
+# =========================================================
+
+@app.route("/notifications")
+def notifications():
+
+    conn = db()
+
+    rows = conn.execute("""
+        SELECT * FROM announcements
+        ORDER BY id DESC
+    """).fetchall()
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+
+<h1>
+<i class="fa-solid fa-bell"></i>
+الإعلانات والتنبيهات
+</h1>
+
+</div>
+
+{% for row in rows %}
+
+<div class="notice">
+
+<h3>{{ row.title }}</h3>
+
+<p style="margin:8px 0;">
+{{ row.content }}
+</p>
+
+<small>
+{{ row.created_at[:16] }}
+</small>
+
+</div>
+
+{% else %}
+
+<div class="card">
+لا توجد إعلانات حالياً.
+</div>
+
+{% endfor %}
+"""
+
+    return render_page(
+        "الإعلانات",
+        content,
+        rows=rows
+    )
+
+
+# =========================================================
+# ADMIN LOGIN
+# =========================================================
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+
+    if request.method == "POST":
+
+        password = request.form.get(
+            "password",
+            ""
+        )
+
+        if password == ADMIN_PASSWORD:
+
+            session["admin"] = True
+
+            return redirect(
+                url_for("admin")
+            )
+
+        flash("كلمة المرور غير صحيحة.")
+
+    content = """
+
+<div class="hero">
+
+<h1>
+<i class="fa-solid fa-lock"></i>
+دخول الإدارة
+</h1>
+
+<p>
+لوحة التحكم الخاصة بإدارة المنصة.
+</p>
+
+</div>
+
+<div class="card">
+
+<form method="POST">
+
+<label>
+كلمة مرور الإدارة
+</label>
+
+<input
+class="input"
+type="password"
+name="password"
+required>
+
+<button class="btn" type="submit">
+دخول
+</button>
+
+</form>
+
+</div>
+"""
+
+    return render_page(
+        "دخول الإدارة",
+        content
+    )
 
 
 @app.route("/admin/logout")
 def admin_logout():
-    session.pop("admin_logged_in", None)
-    return redirect(url_for("admin_login"))
+
+    session.pop("admin", None)
+
+    return redirect(
+        url_for("home")
+    )
 
 
-# ============================================================
-# ERRORS
-# ============================================================
+# =========================================================
+# ADMIN DASHBOARD
+# =========================================================
 
-@app.errorhandler(413)
-def file_too_large(error):
-    return render_page(
-        "File Too Large",
-        """
+@app.route("/admin")
+@admin_required
+def admin():
+
+    conn = db()
+
+    students = conn.execute(
+        "SELECT COUNT(*) AS c FROM students"
+    ).fetchone()["c"]
+
+    subjects_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM subjects"
+    ).fetchone()["c"]
+
+    lessons_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM lessons"
+    ).fetchone()["c"]
+
+    exams_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM exams"
+    ).fetchone()["c"]
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+
+<h1>
+<i class="fa-solid fa-gauge-high"></i>
+لوحة تحكم المنصة
+</h1>
+
+<p>
+إدارة المحتوى والطلاب والإعدادات.
+</p>
+
+</div>
+
+<div class="grid">
+
 <div class="card">
-<h2>حجم الملف كبير</h2>
-<p>الحد الأقصى للملف هو 20 MB.</p>
-<a class="btn" href="javascript:history.back()">رجوع</a>
+<h3>الطلاب</h3>
+<div class="stat">{{ students }}</div>
+</div>
+
+<div class="card">
+<h3>المواد</h3>
+<div class="stat">{{ subjects_count }}</div>
+</div>
+
+<div class="card">
+<h3>المحاضرات</h3>
+<div class="stat">{{ lessons_count }}</div>
+</div>
+
+<div class="card">
+<h3>الاختبارات</h3>
+<div class="stat">{{ exams_count }}</div>
+</div>
+
+</div>
+
+<div class="section-title">
+<h2>إدارة المنصة</h2>
+</div>
+
+<div class="grid">
+
+<a class="card" href="{{ url_for('admin_settings') }}">
+<div class="card-icon">
+<i class="fa-solid fa-palette"></i>
+</div>
+<h3>إعدادات المنصة</h3>
+<p>الاسم والشعار والألوان.</p>
+</a>
+
+<a class="card" href="{{ url_for('admin_subjects') }}">
+<div class="card-icon">
+<i class="fa-solid fa-book"></i>
+</div>
+<h3>إدارة المواد</h3>
+<p>إضافة وحذف المواد.</p>
+</a>
+
+<a class="card" href="{{ url_for('admin_lessons') }}">
+<div class="card-icon">
+<i class="fa-solid fa-video"></i>
+</div>
+<h3>المحاضرات</h3>
+<p>إضافة روابط المحاضرات والملفات.</p>
+</a>
+
+<a class="card" href="{{ url_for('admin_exams') }}">
+<div class="card-icon">
+<i class="fa-solid fa-file-pen"></i>
+</div>
+<h3>الاختبارات</h3>
+<p>إنشاء الاختبارات والأسئلة.</p>
+</a>
+
+<a class="card" href="{{ url_for('admin_announcements') }}">
+<div class="card-icon">
+<i class="fa-solid fa-bullhorn"></i>
+</div>
+<h3>الإعلانات</h3>
+<p>إضافة إعلانات للطلاب.</p>
+</a>
+
 </div>
 """
-    ), 413
 
-
-@app.errorhandler(404)
-def not_found(error):
     return render_page(
-        "404",
-        """
+        "لوحة التحكم",
+        content,
+        students=students,
+        subjects_count=subjects_count,
+        lessons_count=lessons_count,
+        exams_count=exams_count
+    )
+
+
+# =========================================================
+# ADMIN SETTINGS
+# =========================================================
+
+@app.route("/admin/settings", methods=["GET", "POST"])
+@admin_required
+def admin_settings():
+
+    if request.method == "POST":
+
+        site_name = request.form.get(
+            "site_name",
+            ""
+        )
+
+        logo = request.form.get(
+            "logo",
+            ""
+        )
+
+        primary = request.form.get(
+            "primary_color",
+            "#2563eb"
+        )
+
+        secondary = request.form.get(
+            "secondary_color",
+            "#0f172a"
+        )
+
+        accent = request.form.get(
+            "accent_color",
+            "#f59e0b"
+        )
+
+        welcome = request.form.get(
+            "welcome",
+            ""
+        )
+
+        notice = request.form.get(
+            "notice",
+            ""
+        )
+
+        conn = db()
+
+        conn.execute("""
+            UPDATE settings
+            SET site_name=?,
+                logo=?,
+                primary_color=?,
+                secondary_color=?,
+                accent_color=?,
+                welcome=?,
+                notice=?
+            WHERE id=1
+        """, (
+            site_name,
+            logo,
+            primary,
+            secondary,
+            accent,
+            welcome,
+            notice
+        ))
+
+        conn.commit()
+        conn.close()
+
+        flash("تم حفظ الإعدادات.")
+
+        return redirect(
+            url_for("admin_settings")
+        )
+
+    s = settings()
+
+    content = """
+
+<div class="hero">
+
+<h1>إعدادات المنصة</h1>
+
+<p>
+غيّر اسم المنصة والشعار والألوان.
+</p>
+
+</div>
+
 <div class="card">
-<h2>الصفحة غير موجودة</h2>
-<a class="btn" href="/">العودة للرئيسية</a>
+
+<form method="POST">
+
+<label>اسم المنصة</label>
+
+<input class="input"
+name="site_name"
+value="{{ s.site_name }}">
+
+<label>رابط الشعار</label>
+
+<input class="input"
+name="logo"
+value="{{ s.logo }}"
+placeholder="https://...">
+
+<label>اللون الأساسي</label>
+
+<input class="input"
+type="color"
+name="primary_color"
+value="{{ s.primary_color }}">
+
+<label>لون القائمة</label>
+
+<input class="input"
+type="color"
+name="secondary_color"
+value="{{ s.secondary_color }}">
+
+<label>اللون المميز</label>
+
+<input class="input"
+type="color"
+name="accent_color"
+value="{{ s.accent_color }}">
+
+<label>رسالة الترحيب</label>
+
+<input class="input"
+name="welcome"
+value="{{ s.welcome }}">
+
+<label>الإعلان الرئيسي</label>
+
+<textarea
+name="notice">{{ s.notice }}</textarea>
+
+<button class="btn" type="submit">
+<i class="fa-solid fa-save"></i>
+حفظ الإعدادات
+</button>
+
+</form>
+
 </div>
 """
-    ), 404
+
+    return render_page(
+        "إعدادات المنصة",
+        content,
+        s=s
+    )
 
 
-# ============================================================
+# =========================================================
+# ADMIN SUBJECTS
+# =========================================================
+
+@app.route("/admin/subjects", methods=["GET", "POST"])
+@admin_required
+def admin_subjects():
+
+    conn = db()
+
+    if request.method == "POST":
+
+        name = request.form.get(
+            "name",
+            ""
+        ).strip()
+
+        description = request.form.get(
+            "description",
+            ""
+        )
+
+        icon = request.form.get(
+            "icon",
+            "fa-book"
+        )
+
+        if name:
+
+            conn.execute("""
+                INSERT INTO subjects
+                (name,description,icon)
+                VALUES(?,?,?)
+            """, (
+                name,
+                description,
+                icon
+            ))
+
+            conn.commit()
+
+            flash("تمت إضافة المادة.")
+
+    rows = conn.execute("""
+        SELECT * FROM subjects
+        ORDER BY id DESC
+    """).fetchall()
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+
+<h1>إدارة المواد</h1>
+
+</div>
+
+<div class="card">
+
+<form method="POST">
+
+<label>اسم المادة</label>
+
+<input class="input"
+name="name"
+required>
+
+<label>الوصف</label>
+
+<input class="input"
+name="description">
+
+<label>أيقونة Font Awesome</label>
+
+<input class="input"
+name="icon"
+value="fa-book">
+
+<button class="btn">
+إضافة المادة
+</button>
+
+</form>
+
+</div>
+
+<div class="section-title">
+<h2>المواد الحالية</h2>
+</div>
+
+{% for row in rows %}
+
+<div class="card" style="margin-bottom:12px;">
+
+<h3>
+<i class="fa-solid {{ row.icon }}"></i>
+{{ row.name }}
+</h3>
+
+<p>
+{{ row.description }}
+</p>
+
+<a class="btn btn-danger"
+href="{{ url_for('delete_subject',subject_id=row.id) }}"
+onclick="return confirm('حذف المادة؟')">
+حذف
+</a>
+
+</div>
+
+{% endfor %}
+"""
+
+    return render_page(
+        "إدارة المواد",
+        content,
+        rows=rows
+    )
+
+
+@app.route("/admin/subjects/delete/<int:subject_id>")
+@admin_required
+def delete_subject(subject_id):
+
+    conn = db()
+
+    conn.execute(
+        "DELETE FROM lessons WHERE subject_id=?",
+        (subject_id,)
+    )
+
+    conn.execute(
+        "DELETE FROM subjects WHERE id=?",
+        (subject_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return redirect(
+        url_for("admin_subjects")
+    )
+
+
+# =========================================================
+# ADMIN LESSONS
+# =========================================================
+
+@app.route("/admin/lessons", methods=["GET", "POST"])
+@admin_required
+def admin_lessons():
+
+    conn = db()
+
+    if request.method == "POST":
+
+        subject_id = request.form.get(
+            "subject_id"
+        )
+
+        title = request.form.get(
+            "title",
+            ""
+        )
+
+        description = request.form.get(
+            "description",
+            ""
+        )
+
+        video_url = request.form.get(
+            "video_url",
+            ""
+        )
+
+        file_url = request.form.get(
+            "file_url",
+            ""
+        )
+
+        lesson_number = request.form.get(
+            "lesson_number",
+            1
+        )
+
+        conn.execute("""
+            INSERT INTO lessons
+            (
+                subject_id,
+                title,
+                description,
+                video_url,
+                file_url,
+                lesson_number,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?,?)
+        """, (
+            subject_id,
+            title,
+            description,
+            video_url,
+            file_url,
+            lesson_number,
+            datetime.now().isoformat()
+        ))
+
+        conn.commit()
+
+        flash("تمت إضافة المحاضرة.")
+
+    subjects_rows = conn.execute("""
+        SELECT * FROM subjects
+        ORDER BY name
+    """).fetchall()
+
+    lessons = conn.execute("""
+        SELECT
+            lessons.*,
+            subjects.name AS subject_name
+        FROM lessons
+        LEFT JOIN subjects
+        ON subjects.id=lessons.subject_id
+        ORDER BY lessons.id DESC
+    """).fetchall()
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+
+<h1>إدارة المحاضرات</h1>
+
+</div>
+
+<div class="card">
+
+<form method="POST">
+
+<label>المادة</label>
+
+<select class="input"
+name="subject_id"
+required>
+
+{% for subject in subjects_rows %}
+
+<option value="{{ subject.id }}">
+{{ subject.name }}
+</option>
+
+{% endfor %}
+
+</select>
+
+<label>عنوان المحاضرة</label>
+
+<input class="input"
+name="title"
+required>
+
+<label>الوصف</label>
+
+<textarea
+name="description"></textarea>
+
+<label>رابط الفيديو</label>
+
+<input class="input"
+name="video_url"
+placeholder="رابط YouTube أو الفيديو">
+
+<label>رابط الملف</label>
+
+<input class="input"
+name="file_url"
+placeholder="رابط PDF أو ملف">
+
+<label>رقم المحاضرة</label>
+
+<input class="input"
+type="number"
+name="lesson_number"
+value="1">
+
+<button class="btn">
+<i class="fa-solid fa-plus"></i>
+إضافة المحاضرة
+</button>
+
+</form>
+
+</div>
+
+<div class="section-title">
+<h2>المحاضرات الحالية</h2>
+</div>
+
+{% for lesson in lessons %}
+
+<div class="card" style="margin-bottom:12px;">
+
+<h3>
+{{ lesson.title }}
+</h3>
+
+<p>
+المادة:
+{{ lesson.subject_name }}
+</p>
+
+<p>
+رقم المحاضرة:
+{{ lesson.lesson_number }}
+</p>
+
+<a class="btn btn-danger"
+href="{{ url_for('delete_lesson',lesson_id=lesson.id) }}"
+onclick="return confirm('حذف المحاضرة؟')">
+حذف
+</a>
+
+</div>
+
+{% endfor %}
+"""
+
+    return render_page(
+        "إدارة المحاضرات",
+        content,
+        subjects_rows=subjects_rows,
+        lessons=lessons
+    )
+
+
+@app.route("/admin/lessons/delete/<int:lesson_id>")
+@admin_required
+def delete_lesson(lesson_id):
+
+    conn = db()
+
+    conn.execute(
+        "DELETE FROM lessons WHERE id=?",
+        (lesson_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return redirect(
+        url_for("admin_lessons")
+    )
+
+
+# =========================================================
+# ADMIN EXAMS
+# =========================================================
+
+@app.route("/admin/exams", methods=["GET", "POST"])
+@admin_required
+def admin_exams():
+
+    conn = db()
+
+    if request.method == "POST":
+
+        title = request.form.get(
+            "title",
+            ""
+        )
+
+        subject = request.form.get(
+            "subject",
+            ""
+        )
+
+        duration = request.form.get(
+            "duration",
+            30
+        )
+
+        questions = request.form.get(
+            "questions",
+            ""
+        )
+
+        answers = request.form.get(
+            "answers",
+            ""
+        )
+
+        conn.execute("""
+            INSERT INTO exams
+            (
+                title,
+                subject,
+                duration,
+                questions,
+                answers,
+                created_at
+            )
+            VALUES(?,?,?,?,?,?)
+        """, (
+            title,
+            subject,
+            duration,
+            questions,
+            answers,
+            datetime.now().isoformat()
+        ))
+
+        conn.commit()
+
+        flash("تم إنشاء الاختبار.")
+
+    rows = conn.execute("""
+        SELECT * FROM exams
+        ORDER BY id DESC
+    """).fetchall()
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+
+<h1>إدارة الاختبارات</h1>
+
+<p>
+كل سطر في خانة الأسئلة يمثل سؤالاً.
+وكل سطر في خانة الإجابات يمثل الإجابة الصحيحة المقابلة.
+</p>
+
+</div>
+
+<div class="card">
+
+<form method="POST">
+
+<label>عنوان الاختبار</label>
+
+<input class="input"
+name="title"
+required>
+
+<label>المادة</label>
+
+<input class="input"
+name="subject">
+
+<label>مدة الاختبار بالدقائق</label>
+
+<input class="input"
+type="number"
+name="duration"
+value="30">
+
+<label>الأسئلة</label>
+
+<textarea
+name="questions"
+placeholder="السؤال الأول
+السؤال الثاني
+السؤال الثالث"></textarea>
+
+<label>الإجابات الصحيحة</label>
+
+<textarea
+name="answers"
+placeholder="الإجابة الأولى
+الإجابة الثانية
+الإجابة الثالثة"></textarea>
+
+<button class="btn">
+<i class="fa-solid fa-plus"></i>
+إنشاء الاختبار
+</button>
+
+</form>
+
+</div>
+
+<div class="section-title">
+<h2>الاختبارات الحالية</h2>
+</div>
+
+{% for row in rows %}
+
+<div class="card" style="margin-bottom:12px;">
+
+<h3>{{ row.title }}</h3>
+
+<p>
+المادة:
+{{ row.subject }}
+</p>
+
+<a class="btn btn-danger"
+href="{{ url_for('delete_exam',exam_id=row.id) }}"
+onclick="return confirm('حذف الاختبار؟')">
+حذف
+</a>
+
+</div>
+
+{% endfor %}
+"""
+
+    return render_page(
+        "إدارة الاختبارات",
+        content,
+        rows=rows
+    )
+
+
+@app.route("/admin/exams/delete/<int:exam_id>")
+@admin_required
+def delete_exam(exam_id):
+
+    conn = db()
+
+    conn.execute(
+        "DELETE FROM exams WHERE id=?",
+        (exam_id,)
+    )
+
+    conn.execute(
+        "DELETE FROM results WHERE exam_id=?",
+        (exam_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return redirect(
+        url_for("admin_exams")
+    )
+
+
+# =========================================================
+# ADMIN ANNOUNCEMENTS
+# =========================================================
+
+@app.route("/admin/announcements", methods=["GET", "POST"])
+@admin_required
+def admin_announcements():
+
+    conn = db()
+
+    if request.method == "POST":
+
+        title = request.form.get(
+            "title",
+            ""
+        )
+
+        content_text = request.form.get(
+            "content",
+            ""
+        )
+
+        conn.execute("""
+            INSERT INTO announcements
+            (title,content,created_at)
+            VALUES(?,?,?)
+        """, (
+            title,
+            content_text,
+            datetime.now().isoformat()
+        ))
+
+        conn.commit()
+
+        flash("تم نشر الإعلان.")
+
+    rows = conn.execute("""
+        SELECT * FROM announcements
+        ORDER BY id DESC
+    """).fetchall()
+
+    conn.close()
+
+    content = """
+
+<div class="hero">
+
+<h1>إدارة الإعلانات</h1>
+
+</div>
+
+<div class="card">
+
+<form method="POST">
+
+<label>عنوان الإعلان</label>
+
+<input class="input"
+name="title"
+required>
+
+<label>محتوى الإعلان</label>
+
+<textarea
+name="content"
+required></textarea>
+
+<button class="btn">
+<i class="fa-solid fa-bullhorn"></i>
+نشر الإعلان
+</button>
+
+</form>
+
+</div>
+
+{% for row in rows %}
+
+<div class="notice">
+
+<h3>{{ row.title }}</h3>
+
+<p style="margin:10px 0;">
+{{ row.content }}
+</p>
+
+<a class="btn btn-danger"
+href="{{ url_for('delete_announcement',announcement_id=row.id) }}"
+onclick="return confirm('حذف الإعلان؟')">
+حذف
+</a>
+
+</div>
+
+{% endfor %}
+"""
+
+    return render_page(
+        "إدارة الإعلانات",
+        content,
+        rows=rows
+    )
+
+
+@app.route("/admin/announcements/delete/<int:announcement_id>")
+@admin_required
+def delete_announcement(announcement_id):
+
+    conn = db()
+
+    conn.execute(
+        "DELETE FROM announcements WHERE id=?",
+        (announcement_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return redirect(
+        url_for("admin_announcements")
+    )
+
+
+# =========================================================
+# FILE UPLOAD
+# =========================================================
+
+@app.route("/uploads/<path:filename>")
+def uploads(filename):
+
+    return send_from_directory(
+        UPLOAD_FOLDER,
+        filename
+    )
+
+
+# =========================================================
+# PWA
+# =========================================================
+
+@app.route("/manifest.webmanifest")
+def manifest():
+
+    s = settings()
+
+    return jsonify({
+        "name": s["site_name"],
+        "short_name": "جامعة الأنبار",
+        "start_url": "/",
+        "display": "standalone",
+        "background_color": "#f1f5f9",
+        "theme_color": s["primary_color"],
+        "lang": "ar",
+        "dir": "rtl",
+        "icons": []
+    })
+
+
+@app.route("/sw.js")
+def service_worker():
+
+    js = """
+self.addEventListener("install", event => {
+    self.skipWaiting();
+});
+
+self.addEventListener("activate", event => {
+    self.clients.claim();
+});
+
+self.addEventListener("fetch", event => {
+});
+"""
+
+    return (
+        js,
+        200,
+        {
+            "Content-Type":
+            "application/javascript"
+        }
+    )
+
+
+# =========================================================
+# HEALTH CHECK
+# =========================================================
+
+@app.route("/health")
+def health():
+
+    return jsonify({
+        "status": "ok",
+        "platform": "University AI Platform",
+        "gemini": bool(GEMINI_API_KEY)
+    })
+
+
+# =========================================================
 # RUN
-# ============================================================
+# =========================================================
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=port, debug=False)
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            5000
+        )
+    )
+
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False
+    )
